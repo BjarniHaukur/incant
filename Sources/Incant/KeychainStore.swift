@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "com.bjarni.PushType"
+    private static let service = "com.bjarni.Incant"
     private static let account = "openai-api-key"
 
     static func save(_ value: String) throws {

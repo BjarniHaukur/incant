@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 actor RealtimeTranscriber {
-    private let logger = Logger(subsystem: "com.bjarni.PushType", category: "Realtime")
+    private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Realtime")
     private var session: URLSession?
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?

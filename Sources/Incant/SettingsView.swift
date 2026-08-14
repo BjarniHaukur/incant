@@ -17,16 +17,12 @@ struct SettingsView: View {
             )
 
             VStack(spacing: 0) {
-                RecorderOrbView(model: model, orbDiameter: 220, canvasSize: 270)
+                RecorderOrbView(model: model, orbDiameter: 220, canvasSize: 270, showsBufferedText: false)
                     .frame(height: 250)
 
                 Text("Incant")
                     .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .tracking(-0.8)
-                Text("Your voice, directly at the cursor.")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(0.52))
-                    .padding(.top, 5)
 
                 VStack(spacing: 1) {
                     apiKeyRow

@@ -9,7 +9,7 @@
     <key>CFBundleIconFile</key>
     <string>AppIcon.png</string>
     <key>CFBundleIdentifier</key>
-    <string>com.bjarni.PushType</string>
+    <string>com.bjarni.Incant</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

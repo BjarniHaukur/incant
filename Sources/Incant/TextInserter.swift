@@ -2,6 +2,14 @@ import ApplicationServices
 import AppKit
 
 enum TextInserter {
+    final class Target {
+        fileprivate let element: AXUIElement
+
+        fileprivate init(element: AXUIElement) {
+            self.element = element
+        }
+    }
+
     enum LiveInsertionResult {
         case inserted
         case noEditableTarget
@@ -15,13 +23,20 @@ enum TextInserter {
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    static func insertLive(_ text: String) -> LiveInsertionResult {
+    static func captureTarget() -> Target? {
+        guard AXIsProcessTrusted(), let focused = focusedElement(), isEditable(focused) else {
+            return nil
+        }
+        return Target(element: focused)
+    }
+
+    static func insertLive(_ text: String, target: Target? = nil) -> LiveInsertionResult {
         guard AXIsProcessTrusted() else { return .accessibilityDenied }
         guard !text.isEmpty else { return .inserted }
 
         // Prefer replacing the focused element's current selection. This is
         // the most direct insertion path and keeps the caret in the target app.
-        guard let focused = focusedElement(), isEditable(focused) else {
+        guard let focused = target?.element ?? focusedElement(), isEditable(focused) else {
             return .noEditableTarget
         }
 

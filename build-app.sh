@@ -22,6 +22,6 @@ cp "$root/.build/AppIcon-1024.png" "$app_dir/Contents/Resources/AppIcon.png"
 # binary's changing CDHash, which makes macOS forget Accessibility approval on
 # every rebuild.
 codesign --force --deep --sign - \
-  --requirements '=designated => identifier "com.bjarni.PushType"' \
+  --requirements '=designated => identifier "com.bjarni.Incant"' \
   "$app_dir"
 print "$app_dir"

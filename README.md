@@ -16,6 +16,3 @@ open dist/Incant.app
 The API key is stored in macOS Keychain. Incant needs Microphone permission
 and Accessibility permission for text insertion in apps that do not expose a
 writable accessibility text selection.
-
-The legacy `com.bjarni.PushType` bundle and Keychain identifiers are retained
-so upgrading from the original local build preserves permissions and the key.

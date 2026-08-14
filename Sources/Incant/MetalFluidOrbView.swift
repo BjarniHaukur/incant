@@ -161,7 +161,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         )
         encode(
             commandBuffer, pipeline: display,
-            reads: [dyeA, velocityA], writes: [drawable.texture],
+            reads: [dyeA, velocityA, pressureA], writes: [drawable.texture],
             uniforms: &uniforms, width: drawable.texture.width, height: drawable.texture.height
         )
         commandBuffer.present(drawable)
@@ -334,7 +334,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float sheet1 = exp(-pow((uv.x - .68) - .12 * sin(uv.y * 9.0 - u.time * .13 + 1.7), 2.0) / .0014);
         float diagonal = (uv.x + uv.y - 1.18) - .08 * sin((uv.x - uv.y) * 12.0 + u.time * .09);
         float sheet2 = exp(-(diagonal * diagonal) / .0019);
-        density += float3(sheet0, sheet1, sheet2) * (.22 + u.energy * .58) * u.dt;
+        density += float3(sheet0, sheet1, sheet2) * (.22 + u.energy * .12) * u.dt;
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
@@ -352,7 +352,8 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     kernel void renderOrb(
         texture2d<float, access::sample> dye [[texture(0)]],
         texture2d<float, access::sample> velocity [[texture(1)]],
-        texture2d<half, access::write> output [[texture(2)]],
+        texture2d<float, access::sample> pressure [[texture(2)]],
+        texture2d<half, access::write> output [[texture(3)]],
         constant Uniforms &u [[buffer(0)]], uint2 g [[thread_position_in_grid]]) {
         if (any(g >= uint2(u.outputSize))) return;
         float2 uv = (float2(g) + .5) / u.outputSize;
@@ -368,6 +369,17 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 sphereUV = .5 + q * (.37 + .09 * z);
         float2 flow = velocity.sample(fluidSampler, sphereUV).xy;
         float2 refracted = sphereUV + flow * (.028 + .025 * (1.0 - z));
+
+        // Projection pressure is the bridge from dynamics to light. Voice
+        // drives the flow; compressed regions then illuminate the gas rather
+        // than audio amplitude directly turning up the palette.
+        float pressureTexel = 1.0 / u.simSize.x;
+        float pressureCenter = pressure.sample(fluidSampler, sphereUV).x;
+        float pressureX = pressure.sample(fluidSampler, sphereUV + float2(pressureTexel, 0)).x
+            - pressure.sample(fluidSampler, sphereUV - float2(pressureTexel, 0)).x;
+        float pressureY = pressure.sample(fluidSampler, sphereUV + float2(0, pressureTexel)).x
+            - pressure.sample(fluidSampler, sphereUV - float2(0, pressureTexel)).x;
+        float pressureSignal = clamp(abs(pressureCenter) * 16.0 + length(float2(pressureX, pressureY)) * 42.0, 0.0, 1.0);
 
         // Front-to-back integration through seven moving depth planes. Each
         // layer has parallax, absorption and a slightly different fluid
@@ -396,11 +408,11 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float3 dyeDown = dye.sample(fluidSampler, refracted - float2(0, texel)).rgb;
         float3 dyeUp = dye.sample(fluidSampler, refracted + float2(0, texel)).rgb;
         float3 interfaces = abs(dyeRight - dyeLeft) + abs(dyeUp - dyeDown);
-        light += palette(interfaces, u.phase) * (.72 + u.energy * 1.15);
-        light = 1.0 - exp(-light * (2.0 + u.energy));
+        light += palette(interfaces, u.phase) * (.72 + pressureSignal * .62);
+        light = 1.0 - exp(-light * (2.0 + u.energy * .12));
 
         float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.0015, .006, .024);
-        float3 color = base + light * (.62 + .82 * z);
+        float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * .2);
         color *= .22 + .78 * pow(z, .62); // heavy glass absorption at the limb
         color *= .78 + .22 * exp(-density * .35); // dark density occlusion
 

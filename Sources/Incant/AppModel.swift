@@ -16,7 +16,9 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var level: CGFloat = 0
-    @Published private(set) var bufferedText = ""
+    @Published var bufferedText = ""
+    @Published private(set) var autoInsertEnabled = true
+    @Published private(set) var hasInsertionTarget = false
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
 
@@ -26,10 +28,12 @@ final class AppModel: ObservableObject {
 
     private let audio = AudioCapture()
     private let transcriber = RealtimeTranscriber()
-    private let logger = Logger(subsystem: "com.bjarni.PushType", category: "Dictation")
+    private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Dictation")
     private var finishTimeout: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
+    private var targetTrackingTask: Task<Void, Never>?
+    private var insertionTarget: TextInserter.Target?
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -79,6 +83,26 @@ final class AppModel: ObservableObject {
         TextInserter.requestAccessibilityPermission()
     }
 
+    func setAutoInsertEnabled(_ enabled: Bool) {
+        autoInsertEnabled = enabled
+        if enabled {
+            flushBufferedTextIfPossible()
+        } else {
+            bufferFlushTask?.cancel()
+            bufferFlushTask = nil
+        }
+    }
+
+    func insertBufferedText() {
+        flushBufferedTextIfPossible(force: true)
+    }
+
+    func copyBufferedText() {
+        guard !bufferedText.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(bufferedText, forType: .string)
+    }
+
     func startVisualPreview(showPanel: Bool = true) {
         phase = .listening
         if showPanel { showRecorder?() }
@@ -114,6 +138,9 @@ final class AppModel: ObservableObject {
         insertedCharacters = 0
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
+        insertionTarget = TextInserter.captureTarget()
+        hasInsertionTarget = insertionTarget != nil
+        startTargetTracking()
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
 
@@ -180,13 +207,13 @@ final class AppModel: ObservableObject {
         // losing it or pasting it blindly.
         if insertedCharacters == 0, bufferedText.isEmpty, !transcript.isEmpty {
             bufferedText = transcript
-            flushBufferedTextIfPossible()
+            if autoInsertEnabled { flushBufferedTextIfPossible() }
             if phase == .success { return }
         }
 
         if !bufferedText.isEmpty {
             phase = .finishing
-            ensureBufferFlushLoop()
+            if autoInsertEnabled { ensureBufferFlushLoop() }
             return
         }
         guard insertedCharacters > 0 else {
@@ -210,13 +237,18 @@ final class AppModel: ObservableObject {
     private func receivedDelta(_ delta: String) {
         guard phase == .listening || phase == .finishing, !delta.isEmpty else { return }
         bufferedText += delta
-        flushBufferedTextIfPossible()
+        if autoInsertEnabled { flushBufferedTextIfPossible() }
     }
 
-    private func flushBufferedTextIfPossible() {
+    private func flushBufferedTextIfPossible(force: Bool = false) {
+        guard force || autoInsertEnabled else { return }
         guard !bufferedText.isEmpty else { return }
+        if let currentTarget = TextInserter.captureTarget() {
+            insertionTarget = currentTarget
+            hasInsertionTarget = true
+        }
         let pending = bufferedText
-        switch TextInserter.insertLive(pending) {
+        switch TextInserter.insertLive(pending, target: insertionTarget) {
         case .inserted:
             bufferedText = ""
             insertedCharacters += pending.count
@@ -231,6 +263,19 @@ final class AppModel: ObservableObject {
             guard !accessibilityFailureReported else { return }
             accessibilityFailureReported = true
             fail("Allow Accessibility access")
+        }
+    }
+
+    private func startTargetTracking() {
+        targetTrackingTask?.cancel()
+        targetTrackingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let target = TextInserter.captureTarget() {
+                    self?.insertionTarget = target
+                    self?.hasInsertionTarget = true
+                }
+                try? await Task.sleep(for: .milliseconds(140))
+            }
         }
     }
 
@@ -266,6 +311,10 @@ final class AppModel: ObservableObject {
     private func settleToIdle() {
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
+        targetTrackingTask?.cancel()
+        targetTrackingTask = nil
+        insertionTarget = nil
+        hasInsertionTarget = false
         phase = .idle
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil

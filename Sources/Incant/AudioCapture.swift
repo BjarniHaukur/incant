@@ -6,7 +6,7 @@ import OSLog
 
 final class AudioCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
-    private let logger = Logger(subsystem: "com.bjarni.PushType", category: "Audio")
+    private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Audio")
     private var converter: AVAudioConverter?
     private let outputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
@@ -31,7 +31,7 @@ final class AudioCapture: @unchecked Sendable {
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0,
               let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            throw NSError(domain: "PushType.Audio", code: 1, userInfo: [
+            throw NSError(domain: "Incant.Audio", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Could not prepare the microphone"
             ])
         }

@@ -60,8 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildRecorderPanel() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 300),
+        let panel = InteractiveRecorderPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 350),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
         panel.contentView = NSHostingView(rootView: RecorderOrbView(model: model))
         recorderPanel = panel
     }
@@ -136,4 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         showSettings()
     }
+}
+
+private final class InteractiveRecorderPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
