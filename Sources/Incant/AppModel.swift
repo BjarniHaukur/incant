@@ -36,9 +36,7 @@ final class AppModel: ObservableObject {
     private var finishTimeout: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
-    private var targetTrackingTask: Task<Void, Never>?
     private var motionDecayTask: Task<Void, Never>?
-    private var insertionTarget: TextInserter.Target?
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -176,8 +174,6 @@ final class AppModel: ObservableObject {
         insertedCharacters = 0
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
-        insertionTarget = TextInserter.captureTarget()
-        startTargetTracking()
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
 
@@ -298,11 +294,12 @@ final class AppModel: ObservableObject {
     private func flushBufferedTextIfPossible(force: Bool = false) {
         guard force || autoInsertEnabled else { return }
         guard !bufferedText.isEmpty else { return }
-        if let currentTarget = TextInserter.captureTarget() {
-            insertionTarget = currentTarget
+        guard let currentTarget = TextInserter.captureTarget() else {
+            ensureBufferFlushLoop()
+            return
         }
         let pending = bufferedText
-        switch TextInserter.insertLive(pending, target: insertionTarget) {
+        switch TextInserter.insertLive(pending, target: currentTarget) {
         case .inserted:
             bufferedText = ""
             insertedCharacters += pending.count
@@ -317,18 +314,6 @@ final class AppModel: ObservableObject {
             guard !accessibilityFailureReported else { return }
             accessibilityFailureReported = true
             fail("Allow Accessibility access")
-        }
-    }
-
-    private func startTargetTracking() {
-        targetTrackingTask?.cancel()
-        targetTrackingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                if let target = TextInserter.captureTarget() {
-                    self?.insertionTarget = target
-                }
-                try? await Task.sleep(for: .milliseconds(140))
-            }
         }
     }
 
@@ -364,9 +349,6 @@ final class AppModel: ObservableObject {
     private func settleToIdle() {
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
-        targetTrackingTask?.cancel()
-        targetTrackingTask = nil
-        insertionTarget = nil
         phase = .idle
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil
