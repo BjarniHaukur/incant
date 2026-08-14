@@ -1,10 +1,27 @@
-# Incant
+<h1 align="center">Incant</h1>
 
-A tiny native macOS push-to-dictate app using OpenAI Realtime transcription.
+<p align="center">
+  <img src="docs/orb.gif" width="300" alt="The Incant orb: luminous dye folding through a dark glass sphere">
+</p>
+
+<p align="center">
+  <em>A tiny native macOS push-to-dictate app using OpenAI Realtime transcription.</em>
+</p>
 
 Press **Command-Shift-Space** to start recording. Press it again to commit the
 audio and stop. Transcript deltas are inserted continuously at the focused
 cursor while you speak; stopping never pastes a completed transcript.
+
+## The orb
+
+The floating window above is a live fluid simulation, not a video. Dye sheets are
+folded by a divergence-free velocity field, and the result is integrated
+front-to-back through seven parallax depth planes inside a glass shell. Your
+voice feeds energy into the flow and the projection pressure then lights the gas,
+so the orb brightens because it is being stirred rather than because an
+amplitude meter turned the palette up. Dragging the window accelerates the shell
+while the fluid lags behind it. Connecting, finishing, success and error only
+re-tint the same simulation.
 
 ## Build
 
@@ -16,3 +33,14 @@ open dist/Incant.app
 The API key is stored in macOS Keychain. Incant needs Microphone permission
 and Accessibility permission for text insertion in apps that do not expose a
 writable accessibility text selection.
+
+## Rendering the orb animation
+
+`docs/orb.gif` is rendered headlessly, reading the Metal source straight out of
+`Sources/Incant/MetalFluidOrbView.swift` and driving it with the same synthetic
+voice envelope as the app's own visual preview, so the README cannot drift away
+from what ships:
+
+```sh
+swift Resources/make-orb-gif.swift docs/orb.gif
+```
