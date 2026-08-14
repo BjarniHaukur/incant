@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var accessibilityGranted = false
-    @State private var showingVocabulary = false
+    @State private var showingRecognitionContext = false
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -18,8 +18,8 @@ struct SettingsView: View {
             )
 
             VStack(spacing: 0) {
-                RecorderOrbView(model: model, orbDiameter: 208, canvasSize: 252, showsBufferedText: false)
-                    .frame(height: 234)
+                RecorderOrbView(model: model, orbDiameter: 220, canvasSize: 270, showsBufferedText: false)
+                    .frame(height: 250)
 
                 Text("Incant")
                     .font(.system(size: 34, weight: .semibold, design: .rounded))
@@ -32,9 +32,7 @@ struct SettingsView: View {
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     shortcutRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
-                    vocabularyRow
-                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
-                    autoTypeRow
+                    recognitionContextRow
                 }
                 .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {
@@ -57,8 +55,8 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
         .onAppear { accessibilityGranted = TextInserter.isAccessibilityGranted }
         .onReceive(permissionTimer) { _ in accessibilityGranted = TextInserter.isAccessibilityGranted }
-        .sheet(isPresented: $showingVocabulary) {
-            VocabularyEditor(model: model)
+        .sheet(isPresented: $showingRecognitionContext) {
+            RecognitionContextEditor(model: model)
         }
     }
 
@@ -95,21 +93,31 @@ struct SettingsView: View {
 
     private var accessibilityRow: some View {
         HStack(spacing: 14) {
-            statusOrb(ready: accessibilityGranted, color: .cyan)
+            statusOrb(ready: accessibilityGranted && model.autoInsertEnabled, color: .cyan)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Type at the cursor").font(.system(size: 14, weight: .medium))
-                Text(accessibilityGranted ? "Accessibility is ready" : "Allow Incant to insert live text")
+                Text(cursorTypingDescription)
                     .font(.caption).foregroundStyle(.white.opacity(0.42))
             }
             Spacer()
             if accessibilityGranted {
-                Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.cyan)
+                Button(model.autoInsertEnabled ? "On" : "Off") {
+                    model.setAutoInsertEnabled(!model.autoInsertEnabled)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(model.autoInsertEnabled ? .cyan : .gray)
             } else {
                 Button("Allow") { model.requestAccessibility() }
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.cyan)
             }
         }
         .padding(.horizontal, 16).frame(minHeight: 68)
+    }
+
+    private var cursorTypingDescription: String {
+        guard accessibilityGranted else { return "Allow Incant to insert live text" }
+        return model.autoInsertEnabled ? "Stream words at the current cursor" : "Hold words in Incant for editing"
     }
 
     private var shortcutRow: some View {
@@ -127,32 +135,13 @@ struct SettingsView: View {
         .padding(.horizontal, 16).frame(minHeight: 64)
     }
 
-    private var autoTypeRow: some View {
-        HStack(spacing: 14) {
-            statusOrb(ready: model.autoInsertEnabled, color: .blue)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Auto type").font(.system(size: 14, weight: .medium))
-                Text(model.autoInsertEnabled ? "Stream words at the cursor" : "Hold words in Incant for editing")
-                    .font(.caption).foregroundStyle(.white.opacity(0.42))
-            }
-            Spacer()
-            Button(model.autoInsertEnabled ? "On" : "Off") {
-                model.setAutoInsertEnabled(!model.autoInsertEnabled)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .tint(model.autoInsertEnabled ? .blue : .gray)
-        }
-        .padding(.horizontal, 16).frame(minHeight: 64)
-    }
-
-    private var vocabularyRow: some View {
-        Button { showingVocabulary = true } label: {
+    private var recognitionContextRow: some View {
+        Button { showingRecognitionContext = true } label: {
             HStack(spacing: 14) {
-                statusOrb(ready: !model.keywords.isEmpty, color: .indigo)
+                statusOrb(ready: !model.recognitionPrompt.isEmpty, color: .indigo)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Vocabulary").font(.system(size: 14, weight: .medium))
-                    Text(model.keywordSummary)
+                    Text("Recognition context").font(.system(size: 14, weight: .medium))
+                    Text(model.recognitionPromptSummary)
                         .font(.caption).foregroundStyle(.white.opacity(0.42))
                 }
                 Spacer()
@@ -176,7 +165,7 @@ struct SettingsView: View {
 
 }
 
-private struct VocabularyEditor: View {
+private struct RecognitionContextEditor: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
@@ -184,9 +173,9 @@ private struct VocabularyEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Vocabulary")
+                Text("Recognition context")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
-                Text("Add names, acronyms, and terms you say often — one per line.")
+                Text("Tell Incant anything that helps it understand you.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -202,14 +191,14 @@ private struct VocabularyEditor: View {
                 }
 
             HStack {
-                Text("Used as recognition hints; spelling and casing are preserved.")
+                Text("For example: “I discuss cmux, Codex, and Verse. My name is Bjarni.”")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    model.saveKeywords(draft)
+                    model.saveRecognitionPrompt(draft)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -220,6 +209,6 @@ private struct VocabularyEditor: View {
         .frame(width: 480, height: 390)
         .background(Color(red: 0.008, green: 0.012, blue: 0.026))
         .preferredColorScheme(.dark)
-        .onAppear { draft = model.keywords.joined(separator: "\n") }
+        .onAppear { draft = model.recognitionPrompt }
     }
 }

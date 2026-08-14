@@ -22,7 +22,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var orbMotionEnergy: Float = 0
     @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
     @Published private(set) var shortcutError: String?
-    @Published private(set) var keywords = AppModel.loadKeywords()
+    @Published private(set) var recognitionPrompt = AppModel.loadRecognitionPrompt()
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
 
@@ -45,12 +45,8 @@ final class AppModel: ObservableObject {
     var hasAPIKey: Bool { KeychainStore.load() != nil }
     var usesEnvironmentKey: Bool { KeychainStore.environmentKey() != nil }
     var bufferedTextPreview: String { String(bufferedText.suffix(260)) }
-    var keywordSummary: String {
-        switch keywords.count {
-        case 0: return "Help Incant recognize names and terms"
-        case 1: return "1 saved term"
-        default: return "\(keywords.count) saved terms"
-        }
+    var recognitionPromptSummary: String {
+        recognitionPrompt.isEmpty ? "Give Incant context about how you speak" : "Custom context added"
     }
 
     var statusText: String {
@@ -90,15 +86,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func saveKeywords(_ text: String) {
-        let cleaned = text
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.contains("<") && !$0.contains(">") }
-
-        var seen = Set<String>()
-        keywords = cleaned.filter { seen.insert($0.localizedLowercase).inserted }
-        UserDefaults.standard.set(keywords, forKey: Self.keywordsDefaultsKey)
+    func saveRecognitionPrompt(_ text: String) {
+        recognitionPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(recognitionPrompt, forKey: Self.recognitionPromptDefaultsKey)
     }
 
     func updateShortcut(_ shortcut: GlobalHotKey.Shortcut) {
@@ -206,7 +196,7 @@ final class AppModel: ObservableObject {
             do {
                 try await transcriber.connect(
                     apiKey: apiKey,
-                    keywords: keywords,
+                    prompt: recognitionPrompt,
                     onDelta: { [weak self] delta in
                         Task { @MainActor in self?.receivedDelta(delta) }
                     },
@@ -375,9 +365,15 @@ final class AppModel: ObservableObject {
         hideRecorder?()
     }
 
-    private static let keywordsDefaultsKey = "transcriptionKeywords"
+    private static let recognitionPromptDefaultsKey = "transcriptionRecognitionPrompt"
+    private static let legacyKeywordsDefaultsKey = "transcriptionKeywords"
 
-    private static func loadKeywords() -> [String] {
-        UserDefaults.standard.stringArray(forKey: keywordsDefaultsKey) ?? []
+    private static func loadRecognitionPrompt() -> String {
+        if let prompt = UserDefaults.standard.string(forKey: recognitionPromptDefaultsKey) {
+            return prompt
+        }
+        let legacyKeywords = UserDefaults.standard.stringArray(forKey: legacyKeywordsDefaultsKey) ?? []
+        guard !legacyKeywords.isEmpty else { return "" }
+        return "Words and names I frequently use include: \(legacyKeywords.joined(separator: ", "))."
     }
 }

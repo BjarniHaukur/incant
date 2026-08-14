@@ -12,7 +12,7 @@ actor RealtimeTranscriber {
 
     func connect(
         apiKey: String,
-        keywords: [String],
+        prompt: String,
         onDelta: @escaping @Sendable (String) -> Void,
         onFinal: @escaping @Sendable (String) -> Void,
         onError: @escaping @Sendable (String) -> Void
@@ -36,8 +36,8 @@ actor RealtimeTranscriber {
             "model": "gpt-live-transcribe",
             "delay": "low",
         ]
-        if !keywords.isEmpty {
-            transcription["keywords"] = keywords
+        if !prompt.isEmpty {
+            transcription["prompt"] = prompt
         }
 
         try await send([
