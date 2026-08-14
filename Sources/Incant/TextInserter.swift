@@ -1,7 +1,15 @@
 import ApplicationServices
 import AppKit
+import OSLog
 
 enum TextInserter {
+    private static let logger = Logger(subsystem: "com.bjarni.Incant", category: "Insertion")
+    /// Apps already asked for their web accessibility tree, and the last target
+    /// refused, so the log gets one line per app rather than one per delta.
+    /// Every caller runs on the main actor.
+    nonisolated(unsafe) private static var webAccessibilityRequested: Set<pid_t> = []
+    nonisolated(unsafe) private static var lastRefusal = ""
+
     final class Target {
         fileprivate let element: AXUIElement
 
@@ -36,7 +44,9 @@ enum TextInserter {
 
         // Prefer replacing the focused element's current selection. This is
         // the most direct insertion path and keeps the caret in the target app.
-        guard let focused = target?.element ?? focusedElement(), isEditable(focused) else {
+        let focusedTarget = target?.element ?? focusedElement()
+        guard let focused = focusedTarget, isEditable(focused) else {
+            logRefusal(focusedTarget)
             return .noEditableTarget
         }
 
@@ -89,7 +99,45 @@ enum TextInserter {
         return isEditable(focused)
     }
 
+    /// Chromium ships its web-content accessibility tree switched off and builds
+    /// it only once a client asks for it. Until then a focused text box on a web
+    /// page is invisible to the accessibility API, so every Chromium browser and
+    /// every Electron app — Slack, VS Code, Discord — reports no editable target
+    /// and dictation into a web page goes nowhere. Screen readers get the tree
+    /// by setting exactly this attribute. Apps that do not know it return
+    /// unsupported, which is harmless.
+    private static func requestWebAccessibility() {
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              !webAccessibilityRequested.contains(application.processIdentifier) else { return }
+        webAccessibilityRequested.insert(application.processIdentifier)
+        let element = AXUIElementCreateApplication(application.processIdentifier)
+        let result = AXUIElementSetAttributeValue(
+            element,
+            "AXManualAccessibility" as CFString,
+            kCFBooleanTrue
+        )
+        logger.info(
+            """
+            Requested web accessibility from \(application.localizedName ?? "?", privacy: .public): \
+            \(result == .success ? "granted" : "AXError \(result.rawValue)", privacy: .public)
+            """
+        )
+    }
+
+    /// Records which app and which element turned an insertion down, so a report
+    /// of "it does not type into <app>" can be traced without a debugger.
+    private static func logRefusal(_ element: AXUIElement?) {
+        let name = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        let role = element.flatMap { stringAttribute(kAXRoleAttribute, from: $0) } ?? "<no focus>"
+        let subrole = element.flatMap { stringAttribute(kAXSubroleAttribute, from: $0) } ?? "—"
+        let refusal = "\(name)/\(role)/\(subrole)"
+        guard refusal != lastRefusal else { return }
+        lastRefusal = refusal
+        logger.error("No editable target in \(refusal, privacy: .public)")
+    }
+
     private static func focusedElement() -> AXUIElement? {
+        requestWebAccessibility()
         let system = AXUIElementCreateSystemWide()
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(

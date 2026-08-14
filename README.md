@@ -1,7 +1,7 @@
 <h1 align="center">Incant</h1>
 
 <p align="center">
-  <img src="docs/orb.gif" width="300" alt="The Incant orb: luminous dye folding through a dark glass sphere">
+  <img src="docs/orb.webp" width="300" alt="The Incant orb: luminous dye folding through a dark glass sphere">
 </p>
 
 <p align="center">
@@ -41,11 +41,19 @@ writable accessibility text selection.
 
 ## Rendering the orb animation
 
-`docs/orb.gif` is rendered headlessly, reading the Metal source straight out of
+`docs/orb.webp` is rendered headlessly, reading the Metal source straight out of
 `Sources/Incant/MetalFluidOrbView.swift` and driving it with the same synthetic
 voice envelope as the app's own visual preview, so the README cannot drift away
-from what ships:
+from what ships. The trailing number is the session salt, held fixed here so the
+committed animation is reproducible — pass another to shop for a composition:
 
 ```sh
-swift Resources/make-orb-gif.swift docs/orb.gif
+swift Resources/make-orb-animation.swift docs/orb.webp 11
 ```
+
+WebP because its alpha channel stays lossless, which keeps the soft glow and the
+antialiased limb at roughly a GIF's file size; it needs `img2webp` from
+`brew install webp`. Writing `.png` instead produces an APNG with the same
+transparency and no dependencies, at about five times the size, and `.gif` works
+but has only one transparent palette index, so the glow disappears and the edge
+goes hard.

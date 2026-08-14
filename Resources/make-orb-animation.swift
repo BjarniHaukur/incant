@@ -10,9 +10,9 @@ import simd
 // the animation can never drift away from what the app actually draws, and the
 // voice envelope is the same one AppModel.startVisualPreview feeds the orb.
 //
-//   swift Resources/make-orb-gif.swift docs/orb.webp  # soft alpha, smallest (needs img2webp)
-//   swift Resources/make-orb-gif.swift docs/orb.png   # soft alpha, APNG, no dependencies
-//   swift Resources/make-orb-gif.swift docs/orb.gif   # 1-bit alpha: hard edge, no glow
+//   swift Resources/make-orb-animation.swift docs/orb.webp  # soft alpha, smallest (needs img2webp)
+//   swift Resources/make-orb-animation.swift docs/orb.png   # soft alpha, APNG, no dependencies
+//   swift Resources/make-orb-animation.swift docs/orb.gif   # 1-bit alpha: hard edge, no glow
 
 let canvas = 320            // final animation edge, in pixels
 let supersample = 2         // render larger, then box-filter down
@@ -66,7 +66,7 @@ struct Uniforms {
 
 // The app rolls a fresh seed for every session. The README keeps one fixed roll
 // so the committed animation stays reproducible; pass another salt to shop for a
-// composition: `swift Resources/make-orb-gif.swift docs/orb.png 12345`.
+// composition: `swift Resources/make-orb-animation.swift docs/orb.webp 12345`.
 let salt = CommandLine.arguments.count > 2 ? (UInt32(CommandLine.arguments[2]) ?? 0) : 704_133_209
 let vorticity: Float = 0.85
 let dyeSeedAmount: Float = 0.95
