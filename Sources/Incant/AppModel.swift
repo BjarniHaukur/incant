@@ -20,6 +20,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var autoInsertEnabled = true
     @Published private(set) var orbMotion = SIMD2<Float>.zero
     @Published private(set) var orbMotionEnergy: Float = 0
+    /// Rolled fresh for every session so no two dictations look alike. What the
+    /// roll means to the fluid lives with the shader that consumes it.
+    @Published private(set) var orbSeed = OrbSeed.random()
     @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
     @Published private(set) var shortcutError: String?
     @Published private(set) var recognitionPrompt = AppModel.loadRecognitionPrompt()
@@ -41,6 +44,12 @@ final class AppModel: ObservableObject {
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
+    /// Deltas and a final can still arrive while the Realtime socket closes.
+    /// Dismissal stays instant by design — the panel leaves on the hotkey edge
+    /// and teardown happens behind it — so this is what stops that tail from
+    /// typing itself into whatever the user focuses next, with nothing on screen
+    /// left to explain where the text came from.
+    private var acceptsTranscript = false
 
     var hasAPIKey: Bool { KeychainStore.load() != nil }
     var usesEnvironmentKey: Bool { KeychainStore.environmentKey() != nil }
@@ -149,6 +158,7 @@ final class AppModel: ObservableObject {
     }
 
     func startVisualPreview(showPanel: Bool = true) {
+        orbSeed = .random()
         phase = .listening
         if showPanel { showRecorder?() }
         previewTask?.cancel()
@@ -175,6 +185,7 @@ final class AppModel: ObservableObject {
             return
         }
 
+        orbSeed = .random()
         phase = .connecting
         level = 0
         bufferedText = ""
@@ -183,6 +194,7 @@ final class AppModel: ObservableObject {
         insertedCharacters = 0
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
+        acceptsTranscript = true
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
 
@@ -246,6 +258,7 @@ final class AppModel: ObservableObject {
     }
 
     private func receivedFinal(_ transcript: String) {
+        guard acceptsTranscript else { return }
         finishTimeout?.cancel()
         logger.info("Transcription completed after \(self.insertedCharacters, privacy: .public) live characters")
         transcriptionFinalReceived = true
@@ -287,6 +300,7 @@ final class AppModel: ObservableObject {
     }
 
     private func dismissFinishingSession() {
+        acceptsTranscript = false
         hideRecorder?()
         finishTimeout?.cancel()
         bufferFlushTask?.cancel()
@@ -296,7 +310,7 @@ final class AppModel: ObservableObject {
     }
 
     private func receivedDelta(_ delta: String) {
-        guard phase == .listening || phase == .finishing, !delta.isEmpty else { return }
+        guard acceptsTranscript, phase == .listening || phase == .finishing, !delta.isEmpty else { return }
         bufferedText += delta
         if autoInsertEnabled { flushBufferedTextIfPossible() }
     }
@@ -328,8 +342,9 @@ final class AppModel: ObservableObject {
     }
 
     private func ensureBufferFlushLoop() {
-        guard bufferFlushTask == nil, !bufferedText.isEmpty else { return }
+        guard acceptsTranscript, bufferFlushTask == nil, !bufferedText.isEmpty else { return }
         bufferFlushTask = Task { [weak self] in
+            var attemptsAfterFinal = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled, let self else { return }
@@ -338,14 +353,32 @@ final class AppModel: ObservableObject {
                     return
                 }
                 self.flushBufferedTextIfPossible()
+
+                // While the session is live the orb is on screen, so retrying
+                // until a writable target appears is honest. Once the transcript
+                // is final there is nothing left to look at, and retrying
+                // forever would let the buffer type itself into whatever gets
+                // focused minutes later. Give up and keep the text instead: the
+                // composer still holds it, with its copy button.
+                guard self.transcriptionFinalReceived else { continue }
+                attemptsAfterFinal += 1
+                guard attemptsAfterFinal >= 28 else { continue }
+                self.logger.error(
+                    "Gave up inserting \(self.bufferedText.count, privacy: .public) buffered characters"
+                )
+                self.settleToIdle()
+                return
             }
         }
     }
 
     private func fail(_ message: String) {
         logger.error("Dictation failed: \(message, privacy: .public)")
+        acceptsTranscript = false
         audio.stop()
         finishTimeout?.cancel()
+        bufferFlushTask?.cancel()
+        bufferFlushTask = nil
         phase = .error(message)
         NSApplication.shared.dockTile.badgeLabel = "!"
         Task { [weak self] in
@@ -357,6 +390,7 @@ final class AppModel: ObservableObject {
     }
 
     private func settleToIdle() {
+        acceptsTranscript = false
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         phase = .idle

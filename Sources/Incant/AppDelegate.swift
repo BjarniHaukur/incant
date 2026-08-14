@@ -8,6 +8,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var recorderPanel: NSPanel?
     private var settingsWindow: NSWindow?
     private var motionSamples: [ObjectIdentifier: (origin: NSPoint, time: TimeInterval)] = [:]
+    /// Bumped by every show and hide. The fade-out's completion handler carries
+    /// the token it was scheduled with, so a session that starts while the
+    /// previous one is still fading cannot be ordered out by that stale handler.
+    private var recorderVisibility = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
@@ -117,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showRecorder() {
         guard let panel = recorderPanel else { return }
+        recorderVisibility += 1
         let frame = NSScreen.main?.visibleFrame ?? NSScreen.screens[0].visibleFrame
         let origin = NSPoint(
             x: frame.midX - panel.frame.width / 2,
@@ -134,12 +139,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func hideRecorder() {
         guard let panel = recorderPanel else { return }
+        recorderVisibility += 1
+        let token = recorderVisibility
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.075
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 0
-        }, completionHandler: {
-            panel.orderOut(nil)
+        }, completionHandler: { [weak self] in
+            // Animation completions land on the main thread, where the token
+            // this handler has to check lives.
+            MainActor.assumeIsolated {
+                guard let self, self.recorderVisibility == token else { return }
+                panel.orderOut(nil)
+            }
         })
     }
 

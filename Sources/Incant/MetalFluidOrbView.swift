@@ -1,6 +1,32 @@
 import MetalKit
 import SwiftUI
 
+/// Per-session randomization for the fluid. The dye sheets, the curl field and
+/// the dissipation rates used to be compile-time constants starting from a fluid
+/// at rest, so every session bloomed into the same composition. Now a session
+/// begins from random vorticity and random dye, and every parameter of its
+/// character — orientation, thickness, waviness, drift, chirality, decay — is
+/// derived in the shader from `salt`.
+struct OrbSeed: Equatable {
+    /// The 32-bit roll every derived parameter hangs off.
+    var salt: UInt32
+    /// Slides the whole field's phase, so even one salt never repeats a moment.
+    var phaseOffset: Float
+    /// Strength of the initial swirl the fluid starts with.
+    var vorticity: Float
+    /// Density of the dye the fluid starts with.
+    var dyeAmount: Float
+
+    static func random() -> OrbSeed {
+        OrbSeed(
+            salt: .random(in: UInt32.min...UInt32.max),
+            phaseOffset: .random(in: 0..<600),
+            vorticity: .random(in: 0.25...1.15),
+            dyeAmount: .random(in: 0.3...1.5)
+        )
+    }
+}
+
 struct MetalFluidOrbView: NSViewRepresentable {
     @ObservedObject var model: AppModel
 
@@ -29,7 +55,8 @@ struct MetalFluidOrbView: NSViewRepresentable {
             phase: model.phase,
             energy: Float(model.level),
             motion: model.orbMotion,
-            motionEnergy: model.orbMotionEnergy
+            motionEnergy: model.orbMotionEnergy,
+            seed: model.orbSeed
         )
     }
 
@@ -44,11 +71,19 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var energy: Float
         var motion: SIMD2<Float>
         var motionEnergy: Float
+        var seed: OrbSeed
 
-        init(phase: AppModel.Phase, energy: Float, motion: SIMD2<Float>, motionEnergy: Float) {
+        init(
+            phase: AppModel.Phase,
+            energy: Float,
+            motion: SIMD2<Float>,
+            motionEnergy: Float,
+            seed: OrbSeed
+        ) {
             self.energy = energy
             self.motion = motion
             self.motionEnergy = motionEnergy
+            self.seed = seed
             switch phase {
             case .idle, .listening: self.phase = 0
             case .connecting: self.phase = 1
@@ -69,9 +104,19 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var motion: SIMD2<Float>
         var motionEnergy: Float
         var padding: Float = 0
+        var salt: UInt32
+        var phaseOffset: Float
+        var vorticity: Float
+        var dyeSeedAmount: Float
     }
 
-    var state = VisualState(phase: .idle, energy: 0, motion: .zero, motionEnergy: 0)
+    var state = VisualState(
+        phase: .idle,
+        energy: 0,
+        motion: .zero,
+        motionEnergy: 0,
+        seed: .random()
+    )
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -81,6 +126,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     private let project: MTLComputePipelineState
     private let advectDye: MTLComputePipelineState
     private let display: MTLComputePipelineState
+    private let clearField: MTLComputePipelineState
+    private let seedVelocity: MTLComputePipelineState
+    private let seedDye: MTLComputePipelineState
     private var velocityA: MTLTexture
     private var velocityB: MTLTexture
     private var pressureA: MTLTexture
@@ -92,6 +140,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     private var startTime = CACurrentMediaTime()
     private var lastFrame = CACurrentMediaTime()
     private var warmupFrames = 24
+    private var activeSeed: OrbSeed?
 
     init?(view: MTKView) {
         guard let device = view.device,
@@ -102,7 +151,10 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
               let jacobi = Self.pipeline("jacobiPressure", library, device),
               let project = Self.pipeline("projectVelocity", library, device),
               let advectDye = Self.pipeline("advectDye", library, device),
-              let display = Self.pipeline("renderOrb", library, device) else { return nil }
+              let display = Self.pipeline("renderOrb", library, device),
+              let clearField = Self.pipeline("clearField", library, device),
+              let seedVelocity = Self.pipeline("seedVelocity", library, device),
+              let seedDye = Self.pipeline("seedDye", library, device) else { return nil }
 
         self.device = device
         self.queue = queue
@@ -112,6 +164,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         self.project = project
         self.advectDye = advectDye
         self.display = display
+        self.clearField = clearField
+        self.seedVelocity = seedVelocity
+        self.seedDye = seedDye
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float,
@@ -145,36 +200,30 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
               let commandBuffer = queue.makeCommandBuffer() else { return }
 
         let now = CACurrentMediaTime()
+        if state.seed != activeSeed {
+            activeSeed = state.seed
+            startTime = now
+            lastFrame = now
+            warmupFrames = 24
+            encodeInitialConditions(commandBuffer)
+        }
         let elapsed = Float(now - startTime)
         let realDT = Float(min(max(now - lastFrame, 1.0 / 120.0), 1.0 / 20.0))
         lastFrame = now
         let steps = warmupFrames > 0 ? 4 : 1
         warmupFrames = max(0, warmupFrames - steps)
 
+        let outputSize = SIMD2(Float(drawable.texture.width), Float(drawable.texture.height))
         for index in 0..<steps {
-            var uniforms = Uniforms(
+            var uniforms = makeUniforms(
                 dt: warmupFrames > 0 ? 1.0 / 45.0 : realDT,
                 time: elapsed - Float(steps - index) * realDT,
-                energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
-                phase: state.phase,
-                simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
-                outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
-                motion: state.motion,
-                motionEnergy: state.motionEnergy
+                outputSize: outputSize
             )
             encodeSimulation(commandBuffer, uniforms: &uniforms)
         }
 
-        var uniforms = Uniforms(
-            dt: realDT,
-            time: elapsed,
-            energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
-            phase: state.phase,
-            simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
-            outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
-            motion: state.motion,
-            motionEnergy: state.motionEnergy
-        )
+        var uniforms = makeUniforms(dt: realDT, time: elapsed, outputSize: outputSize)
         encode(
             commandBuffer, pipeline: display,
             reads: [dyeA, velocityA, pressureA], writes: [drawable.texture],
@@ -182,6 +231,36 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         )
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    private func makeUniforms(dt: Float, time: Float, outputSize: SIMD2<Float>) -> Uniforms {
+        Uniforms(
+            dt: dt,
+            time: time,
+            energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
+            phase: state.phase,
+            simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
+            outputSize: outputSize,
+            motion: state.motion,
+            motionEnergy: state.motionEnergy,
+            salt: state.seed.salt,
+            phaseOffset: state.seed.phaseOffset,
+            vorticity: state.seed.vorticity,
+            dyeSeedAmount: state.seed.dyeAmount
+        )
+    }
+
+    /// A session starts from a random swirl carrying random dye rather than from
+    /// a fluid at rest, which is what made every previous session open the same
+    /// way. Pressure and the scratch textures start clean so the first
+    /// projection has only the seeded velocity to work with.
+    private func encodeInitialConditions(_ buffer: MTLCommandBuffer) {
+        var uniforms = makeUniforms(dt: 0, time: 0, outputSize: .zero)
+        encode(buffer, pipeline: seedVelocity, reads: [], writes: [velocityA], uniforms: &uniforms)
+        encode(buffer, pipeline: seedDye, reads: [], writes: [dyeA], uniforms: &uniforms)
+        for texture in [velocityB, pressureA, pressureB, divergenceTexture, dyeB] {
+            encode(buffer, pipeline: clearField, reads: [], writes: [texture], uniforms: &uniforms)
+        }
     }
 
     private func encodeSimulation(_ buffer: MTLCommandBuffer, uniforms: inout Uniforms) {
@@ -240,24 +319,69 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 motion;
         float motionEnergy;
         float padding;
+        uint salt;
+        float phaseOffset;
+        float vorticity;
+        float dyeSeedAmount;
     };
 
     constexpr sampler fluidSampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
-    float2 curlField(float2 p, float t, float energy) {
+    // Every per-session parameter hangs off one 32-bit salt the app rolls fresh
+    // for each dictation. Slots are fixed addresses into that roll, so a salt
+    // reproduces a session exactly while neighbouring salts share nothing.
+    uint wangHash(uint x) {
+        x = (x ^ 61u) ^ (x >> 16);
+        x *= 9u;
+        x = x ^ (x >> 4);
+        x *= 0x27d4eb2du;
+        x = x ^ (x >> 15);
+        return x;
+    }
+
+    float saltedUnit(uint salt, uint slot) {
+        return float(wangHash(salt ^ (slot * 0x9e3779b9u))) * (1.0 / 4294967296.0);
+    }
+
+    float salted(uint salt, uint slot, float low, float high) {
+        return mix(low, high, saltedUnit(salt, slot));
+    }
+
+    float latticeNoise(float2 p, uint salt) {
+        int2 cell = int2(floor(p));
+        float2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float corners[4];
+        for (uint i = 0; i < 4; i++) {
+            int2 corner = cell + int2(int(i & 1u), int(i >> 1u));
+            uint hashed = wangHash(
+                uint(corner.x + 8192) * 73856093u
+                ^ uint(corner.y + 8192) * 19349663u
+                ^ salt
+            );
+            corners[i] = float(hashed) * (1.0 / 4294967296.0);
+        }
+        return mix(mix(corners[0], corners[1], f.x), mix(corners[2], corners[3], f.x), f.y);
+    }
+
+    float2 curlField(float2 p, float t, float energy, uint salt) {
         float2 v = float2(0.0);
+        float wavenumber = salted(salt, 40, .55, 1.95);
+        float churn = salted(salt, 41, .5, 2.1);
+        float chirality = saltedUnit(salt, 42) < .5 ? -1.0 : 1.0;
         // Alternating orthogonal shears are a classic chaotic mixer. Each
         // component is independent of its own axis, so the field remains
         // divergence-free without creating a privileged vortex center.
         for (uint i = 0; i < 7; i++) {
             float fi = float(i);
-            float kx = 2.2 + fi * 1.31;
-            float ky = 2.8 + fi * 1.17;
-            float direction = (i & 1) == 0 ? 1.0 : -1.0;
-            float phaseX = ky * p.y + direction * t * (.23 + fi * .071)
-                + sin(t * (.11 + fi * .023) + fi * 1.3) * (0.7 + energy);
-            float phaseY = kx * p.x - direction * t * (.29 + fi * .063)
-                + cos(t * (.14 + fi * .019) - fi * .9) * (0.65 + energy);
+            float kx = (2.2 + fi * 1.31) * wavenumber;
+            float ky = (2.8 + fi * 1.17) * wavenumber;
+            float direction = ((i & 1) == 0 ? 1.0 : -1.0) * chirality;
+            float offset = salted(salt, 44 + i, 0.0, 6.2831853);
+            float phaseX = ky * p.y + direction * t * (.23 + fi * .071) * churn
+                + sin(t * (.11 + fi * .023) * churn + fi * 1.3 + offset) * (0.7 + energy);
+            float phaseY = kx * p.x - direction * t * (.29 + fi * .063) * churn
+                + cos(t * (.14 + fi * .019) * churn - fi * .9 - offset) * (0.65 + energy);
             float amplitude = .032 / (1.0 + fi * .42);
             float gain = amplitude * (.28 + energy * (1.6 + fi * .72));
             v.x += gain * sin(phaseX);
@@ -266,18 +390,63 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         return v;
     }
 
+    kernel void clearField(
+        texture2d<half, access::write> output [[texture(0)]],
+        constant Uniforms &u [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
+        if (any(gid >= uint2(u.simSize))) return;
+        output.write(half4(0), gid);
+    }
+
+    // The curl of a noise potential is divergence-free by construction, so the
+    // fluid can open on a random swirl the projection has nothing to undo.
+    kernel void seedVelocity(
+        texture2d<half, access::write> output [[texture(0)]],
+        constant Uniforms &u [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
+        if (any(gid >= uint2(u.simSize))) return;
+        float2 uv = (float2(gid) + .5) / u.simSize;
+        float scale = salted(u.salt, 60, 1.8, 5.5);
+        float epsilon = .3 / scale;
+        float2 p = uv * scale;
+        float dx = latticeNoise(p + float2(epsilon, 0), u.salt) - latticeNoise(p - float2(epsilon, 0), u.salt);
+        float dy = latticeNoise(p + float2(0, epsilon), u.salt) - latticeNoise(p - float2(0, epsilon), u.salt);
+        float2 velocity = float2(dy, -dx) / (2.0 * epsilon) * u.vorticity * .14;
+        float envelope = 1.0 - smoothstep(.58, 1.0, length((uv - .5) * 2.0));
+        output.write(half4(half2(clamp(velocity * envelope, -.8, .8)), 0, 1), gid);
+    }
+
+    // Three independent noise fields, one per dye channel, so the palette starts
+    // unevenly mixed instead of blooming out of an empty sphere.
+    kernel void seedDye(
+        texture2d<half, access::write> output [[texture(0)]],
+        constant Uniforms &u [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
+        if (any(gid >= uint2(u.simSize))) return;
+        float2 uv = (float2(gid) + .5) / u.simSize;
+        float3 density = float3(0.0);
+        for (uint i = 0; i < 3; i++) {
+            float scale = salted(u.salt, 64 + i, 1.5, 6.5);
+            float2 drift = float2(salted(u.salt, 68 + i, 0.0, 16.0), salted(u.salt, 72 + i, 0.0, 16.0));
+            float threshold = salted(u.salt, 76 + i, .22, .48);
+            float noise = latticeNoise(uv * scale + drift, u.salt ^ ((i + 1u) * 0x85ebca6bu));
+            density[i] = pow(max(noise - threshold, 0.0) / (1.0 - threshold), 1.5) * u.dyeSeedAmount;
+        }
+        float envelope = 1.0 - smoothstep(.5, 1.0, length((uv - .5) * 2.0));
+        output.write(half4(half3(clamp(density * envelope * 1.6, 0.0, 3.0)), 1), gid);
+    }
+
     kernel void advectVelocity(
         texture2d<float, access::sample> source [[texture(0)]],
         texture2d<half, access::write> output [[texture(1)]],
         constant Uniforms &u [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
         if (any(gid >= uint2(u.simSize))) return;
+        float t = u.time + u.phaseOffset;
         float2 uv = (float2(gid) + .5) / u.simSize;
         float2 velocity = source.sample(fluidSampler, uv).xy;
         float2 previous = uv - velocity * u.dt * (1.18 + u.energy * .42);
-        float2 advected = source.sample(fluidSampler, previous).xy * pow(.988, u.dt * 60.0);
+        float2 advected = source.sample(fluidSampler, previous).xy
+            * pow(salted(u.salt, 30, .982, .993), u.dt * 60.0);
         float2 p = (uv - .5) * 2.0;
         float stateGain = u.phase == 1 ? .6 + .4 * sin(u.time * 2.4) : 1.0;
-        advected += curlField(p, u.time, u.energy) * u.dt * stateGain;
+        advected += curlField(p, t, u.energy, u.salt) * u.dt * stateGain;
 
         // Moving the window accelerates its glass shell while the fluid lags
         // behind. A soft spatial envelope turns that inertia into pressure;
@@ -346,9 +515,10 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         texture2d<half, access::write> output [[texture(2)]],
         constant Uniforms &u [[buffer(0)]], uint2 g [[thread_position_in_grid]]) {
         if (any(g >= uint2(u.simSize))) return;
+        float t = u.time + u.phaseOffset;
         float2 uv = (float2(g) + .5) / u.simSize;
         float2 v = velocity.sample(fluidSampler, uv).xy;
-        float2 previous = uv - v * u.dt * (1.2 + u.energy * .45);
+        float2 previous = uv - v * u.dt * (salted(u.salt, 31, .95, 1.55) + u.energy * .45);
         float3 centerDye = dye.sample(fluidSampler, previous).rgb;
         float2 texel = 1.0 / u.simSize;
         float3 neighboringDye = (
@@ -357,16 +527,29 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             + dye.sample(fluidSampler, previous + float2(0, texel.y)).rgb
             + dye.sample(fluidSampler, previous - float2(0, texel.y)).rgb
         ) * .25;
-        float diffusion = .055 + u.energy * .035;
-        float3 density = mix(centerDye, neighboringDye, diffusion) * pow(.988, u.dt * 60.0);
-        // Continuous dye sheets are folded by the projected velocity field.
-        // Their different slopes and drift rates prevent a single spiral from
-        // becoming the composition's dominant gesture.
-        float sheet0 = exp(-pow((uv.y - .34) - .1 * sin(uv.x * 11.0 + u.time * .19), 2.0) / .0011);
-        float sheet1 = exp(-pow((uv.x - .68) - .12 * sin(uv.y * 9.0 - u.time * .13 + 1.7), 2.0) / .0014);
-        float diagonal = (uv.x + uv.y - 1.18) - .08 * sin((uv.x - uv.y) * 12.0 + u.time * .09);
-        float sheet2 = exp(-(diagonal * diagonal) / .0019);
-        density += float3(sheet0, sheet1, sheet2) * (.22 + u.energy * .12) * u.dt;
+        float diffusion = salted(u.salt, 32, .03, .085) + u.energy * .035;
+        float3 density = mix(centerDye, neighboringDye, diffusion)
+            * pow(salted(u.salt, 33, .981, .993), u.dt * 60.0);
+
+        // One continuous dye sheet per channel, folded by the projected velocity
+        // field. Orientation, offset, thickness, waviness and drift are all
+        // rolled per session, so the composition has no fixed skeleton for the
+        // eye to recognise from one dictation to the next.
+        float3 injection = float3(0.0);
+        float2 centered = uv - .5;
+        for (uint i = 0; i < 3; i++) {
+            uint slot = i * 8u;
+            float angle = salted(u.salt, slot + 1, 0.0, 6.2831853);
+            float2 normal = float2(cos(angle), sin(angle));
+            float2 along = float2(-normal.y, normal.x);
+            float wave = salted(u.salt, slot + 2, .02, .2)
+                * sin(dot(centered, along) * salted(u.salt, slot + 3, 4.0, 17.0)
+                      + t * salted(u.salt, slot + 4, -.42, .42));
+            float distance = dot(centered, normal) - salted(u.salt, slot + 5, -.3, .3) - wave;
+            float thickness = salted(u.salt, slot + 6, .0007, .0042);
+            injection[i] = exp(-(distance * distance) / thickness) * salted(u.salt, slot + 7, .45, 1.5);
+        }
+        density += injection * (.22 + u.energy * .12) * u.dt;
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 

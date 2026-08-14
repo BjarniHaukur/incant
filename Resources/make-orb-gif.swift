@@ -5,26 +5,29 @@ import Metal
 import UniformTypeIdentifiers
 import simd
 
-// Renders the README's orb animation headlessly. The Metal source is read out
-// of MetalFluidOrbView.swift rather than copied, so the GIF can never drift
-// away from what the app actually draws, and the voice envelope is the same one
-// AppModel.startVisualPreview feeds the orb.
+// Renders the README's orb animation headlessly, on a transparent background.
+// The Metal source is read out of MetalFluidOrbView.swift rather than copied, so
+// the animation can never drift away from what the app actually draws, and the
+// voice envelope is the same one AppModel.startVisualPreview feeds the orb.
 //
-//   swift Resources/make-orb-gif.swift docs/orb.gif
+//   swift Resources/make-orb-gif.swift docs/orb.webp  # soft alpha, smallest (needs img2webp)
+//   swift Resources/make-orb-gif.swift docs/orb.png   # soft alpha, APNG, no dependencies
+//   swift Resources/make-orb-gif.swift docs/orb.gif   # 1-bit alpha: hard edge, no glow
 
-let canvas = 320            // final GIF edge, in pixels
+let canvas = 320            // final animation edge, in pixels
 let supersample = 2         // render larger, then box-filter down
 let orbFraction = 0.70      // orb diameter as a fraction of the canvas
-let fps = 20
-let loopFrames = 80         // 4s loop
-let crossfadeFrames = 12    // tail blended back over the head to close the loop
-let prerollFrames = 140     // let the dye develop before the first kept frame
+let fps = 30                // the app's own preferredFramesPerSecond
+let loopFrames = 120        // 4s loop
+let crossfadeFrames = 18    // tail blended back over the head to close the loop
+let prerollFrames = 210     // let the dye develop before the first kept frame
 
 let root = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 let outputURL = URL(
-    filePath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "docs/orb.gif",
+    filePath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "docs/orb.png",
     relativeTo: URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory)
 )
+let format = outputURL.pathExtension.lowercased()
 
 func fail(_ message: String) -> Never {
     fputs("make-orb-gif: \(message)\n", stderr)
@@ -55,7 +58,18 @@ struct Uniforms {
     var motion: SIMD2<Float>
     var motionEnergy: Float
     var padding: Float = 0
+    var salt: UInt32
+    var phaseOffset: Float
+    var vorticity: Float
+    var dyeSeedAmount: Float
 }
+
+// The app rolls a fresh seed for every session. The README keeps one fixed roll
+// so the committed animation stays reproducible; pass another salt to shop for a
+// composition: `swift Resources/make-orb-gif.swift docs/orb.png 12345`.
+let salt = CommandLine.arguments.count > 2 ? (UInt32(CommandLine.arguments[2]) ?? 0) : 704_133_209
+let vorticity: Float = 0.85
+let dyeSeedAmount: Float = 0.95
 
 guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
     fail("no Metal device")
@@ -71,6 +85,9 @@ let jacobiPressure = try pipeline("jacobiPressure")
 let projectVelocity = try pipeline("projectVelocity")
 let advectDye = try pipeline("advectDye")
 let renderOrb = try pipeline("renderOrb")
+let clearField = try pipeline("clearField")
+let seedVelocity = try pipeline("seedVelocity")
+let seedDye = try pipeline("seedDye")
 
 let simulationSize = 128
 func simTexture() -> MTLTexture {
@@ -140,9 +157,8 @@ var orbBytes = [UInt8](repeating: 0, count: orbBytesPerRow * orbPixels)
 var renderedFrames: [[Float]] = []
 let totalFrames = loopFrames + crossfadeFrames
 
-for step in 0..<(prerollFrames + totalFrames) {
-    let time = Float(step) * dt
-    var uniforms = Uniforms(
+func makeUniforms(dt: Float, time: Float) -> Uniforms {
+    Uniforms(
         dt: dt,
         time: time,
         energy: max(voiceLevel(at: time), 0.015),
@@ -150,8 +166,31 @@ for step in 0..<(prerollFrames + totalFrames) {
         simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
         outputSize: SIMD2(Float(orbPixels), Float(orbPixels)),
         motion: .zero,
-        motionEnergy: 0
+        motionEnergy: 0,
+        salt: salt,
+        phaseOffset: 0,
+        vorticity: vorticity,
+        dyeSeedAmount: dyeSeedAmount
     )
+}
+
+// The same random initial conditions the app starts a session from, held fixed
+// by the salt above.
+do {
+    guard let buffer = queue.makeCommandBuffer() else { fail("no command buffer") }
+    var uniforms = makeUniforms(dt: 0, time: 0)
+    encode(buffer, seedVelocity, reads: [], writes: [velocityA], uniforms: &uniforms, size: simulationSize)
+    encode(buffer, seedDye, reads: [], writes: [dyeA], uniforms: &uniforms, size: simulationSize)
+    for texture in [velocityB, pressureA, pressureB, divergenceTexture, dyeB] {
+        encode(buffer, clearField, reads: [], writes: [texture], uniforms: &uniforms, size: simulationSize)
+    }
+    buffer.commit()
+    buffer.waitUntilCompleted()
+}
+
+for step in 0..<(prerollFrames + totalFrames) {
+    let time = Float(step) * dt
+    var uniforms = makeUniforms(dt: dt, time: time)
     guard let buffer = queue.makeCommandBuffer() else { fail("no command buffer") }
     encode(buffer, advectVelocity, reads: [velocityA], writes: [velocityB], uniforms: &uniforms, size: simulationSize)
     encode(buffer, computeDivergence, reads: [velocityB], writes: [divergenceTexture], uniforms: &uniforms, size: simulationSize)
@@ -200,9 +239,8 @@ for index in 0..<crossfadeFrames {
     frames[index] = zip(tail, head).map { $0 + ($1 - $0) * weight }
 }
 
-// MARK: - Composite onto the app's dark backdrop
+// MARK: - Composite the ambient glow behind the orb, over nothing
 
-let backdrop = SIMD3<Float>(0.024, 0.028, 0.043)
 let glowColor = SIMD3<Float>(0.02, 0.38, 1)      // RecorderOrbView's listening glow
 let center = Float(canvas - 1) / 2
 let orbRadius = Float(canvas) * Float(orbFraction) / 2
@@ -215,7 +253,7 @@ func smoothstep(_ edge0: Float, _ edge1: Float, _ x: Float) -> Float {
 }
 
 var images: [CGImage] = []
-var composite = [UInt8](repeating: 255, count: canvas * canvas * 4)
+var composite = [UInt8](repeating: 0, count: canvas * canvas * 4)
 for (index, frame) in frames.enumerated() {
     let voice = voiceLevel(at: Float(prerollFrames + index) * dt)
     let glowStrength = 0.1 + voice * 0.035
@@ -226,8 +264,10 @@ for (index, frame) in frames.enumerated() {
             let dx = Float(x) - center
             let dy = Float(y) - center
             let distance = (dx * dx + dy * dy).squareRoot()
-            let glow = glowStrength * (1 - smoothstep(glowRadius - glowSoftness, glowRadius + glowSoftness, distance))
-            var color = backdrop * (1 - glow) + glowColor * glow
+            let glowAlpha = glowStrength * (1 - smoothstep(glowRadius - glowSoftness, glowRadius + glowSoftness, distance))
+            // Premultiplied throughout: it is what the containers store, and it
+            // is the only space in which filtering an edge is correct.
+            var pixel = SIMD4(glowColor * glowAlpha, glowAlpha)
 
             // Box-filter the supersampled orb into this destination pixel.
             let sx0 = Int((Float(x) - orbOrigin)) * supersample
@@ -239,18 +279,23 @@ for (index, frame) in frames.enumerated() {
                     let row = sy * orbBytesPerRow
                     for sx in sx0..<(sx0 + supersample) {
                         let offset = row + sx * 4
-                        sum += SIMD4(frame[offset], frame[offset + 1], frame[offset + 2], frame[offset + 3])
+                        let alpha = frame[offset + 3]
+                        sum += SIMD4(
+                            frame[offset] * alpha,
+                            frame[offset + 1] * alpha,
+                            frame[offset + 2] * alpha,
+                            alpha
+                        )
                     }
                 }
-                let sample = sum / Float(supersample * supersample)
-                let alpha = sample.w
-                color = color * (1 - alpha) + SIMD3(sample.x, sample.y, sample.z) * alpha
+                let orb = sum / Float(supersample * supersample)
+                pixel = orb + pixel * (1 - orb.w)
             }
 
             let offset = (y * canvas + x) * 4
-            composite[offset] = UInt8(min(max(color.x, 0), 1) * 255)
-            composite[offset + 1] = UInt8(min(max(color.y, 0), 1) * 255)
-            composite[offset + 2] = UInt8(min(max(color.z, 0), 1) * 255)
+            for channel in 0..<4 {
+                composite[offset + channel] = UInt8(min(max(pixel[channel], 0), 1) * 255)
+            }
         }
     }
 
@@ -262,7 +307,7 @@ for (index, frame) in frames.enumerated() {
             bitsPerPixel: 32,
             bytesPerRow: canvas * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
             provider: provider,
             decode: nil,
             shouldInterpolate: false,
@@ -273,35 +318,79 @@ for (index, frame) in frames.enumerated() {
 
 // MARK: - Write
 
-if ProcessInfo.processInfo.arguments.contains("--frames") {
-    let framesDirectory = outputURL.deletingLastPathComponent().appending(path: "orb-frames")
-    try? FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
+func writePNGFrames(to directory: URL) {
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     for (index, image) in images.enumerated() {
-        let url = framesDirectory.appending(path: String(format: "frame-%04d.png", index))
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { continue }
+        let url = directory.appending(path: String(format: "frame-%04d.png", index))
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        ) else { continue }
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
     }
-    print("wrote PNG frames to \(framesDirectory.path)")
 }
 
 try? FileManager.default.createDirectory(
     at: outputURL.deletingLastPathComponent(),
     withIntermediateDirectories: true
 )
-guard let destination = CGImageDestinationCreateWithURL(
-    outputURL as CFURL, UTType.gif.identifier as CFString, images.count, nil
-) else { fail("could not open \(outputURL.path)") }
-CGImageDestinationSetProperties(destination, [
-    kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]
-] as CFDictionary)
-for image in images {
-    CGImageDestinationAddImage(destination, image, [
-        kCGImagePropertyGIFDictionary: [
-            kCGImagePropertyGIFDelayTime: 1.0 / Double(fps),
-            kCGImagePropertyGIFUnclampedDelayTime: 1.0 / Double(fps)
-        ]
-    ] as CFDictionary)
+let delay = 1.0 / Double(fps)
+
+switch format {
+case "webp":
+    // WebP compresses the alpha channel losslessly even in lossy mode, so the
+    // glow and the antialiased limb survive at roughly a GIF's file size.
+    let staging = URL.temporaryDirectory.appending(path: "incant-orb-frames-\(getpid())")
+    writePNGFrames(to: staging)
+    defer { try? FileManager.default.removeItem(at: staging) }
+    let frameFiles = (try? FileManager.default.contentsOfDirectory(atPath: staging.path).sorted()) ?? []
+    let process = Process()
+    process.executableURL = URL(filePath: "/usr/bin/env")
+    process.arguments = ["img2webp", "-loop", "0", "-d", String(Int((delay * 1000).rounded())),
+                         "-lossy", "-q", "82", "-m", "6"]
+        + frameFiles.map { staging.appending(path: $0).path }
+        + ["-o", outputURL.path]
+    do {
+        try process.run()
+    } catch {
+        fail("img2webp not found — brew install webp, or render docs/orb.png instead")
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { fail("img2webp failed") }
+
+case "gif", "png":
+    // GIF carries a single transparent palette index, so its edge and glow can
+    // only be all-or-nothing; APNG keeps the alpha ramp the shader produced.
+    let isGIF = format == "gif"
+    let containerType = isGIF ? UTType.gif : UTType.png
+    let containerProperties: CFDictionary = isGIF
+        ? [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary
+        : [kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGLoopCount: 0]] as CFDictionary
+    let frameProperties: CFDictionary = isGIF
+        ? [kCGImagePropertyGIFDictionary: [
+            kCGImagePropertyGIFDelayTime: delay,
+            kCGImagePropertyGIFUnclampedDelayTime: delay
+          ]] as CFDictionary
+        : [kCGImagePropertyPNGDictionary: [
+            kCGImagePropertyAPNGDelayTime: delay,
+            kCGImagePropertyAPNGUnclampedDelayTime: delay
+          ]] as CFDictionary
+    guard let destination = CGImageDestinationCreateWithURL(
+        outputURL as CFURL, containerType.identifier as CFString, images.count, nil
+    ) else { fail("could not open \(outputURL.path)") }
+    CGImageDestinationSetProperties(destination, containerProperties)
+    for image in images {
+        CGImageDestinationAddImage(destination, image, frameProperties)
+    }
+    guard CGImageDestinationFinalize(destination) else { fail("could not encode \(outputURL.path)") }
+
+default:
+    fail("unsupported output \(outputURL.lastPathComponent) — use .webp, .png or .gif")
 }
-guard CGImageDestinationFinalize(destination) else { fail("could not encode \(outputURL.path)") }
-print("wrote \(outputURL.path) — \(images.count) frames, \(canvas)x\(canvas)")
+
+if ProcessInfo.processInfo.arguments.contains("--frames") {
+    let framesDirectory = outputURL.deletingLastPathComponent().appending(path: "orb-frames")
+    writePNGFrames(to: framesDirectory)
+    print("wrote PNG frames to \(framesDirectory.path)")
+}
+print("wrote \(outputURL.path) — \(images.count) frames, \(canvas)x\(canvas) @ \(fps)fps")

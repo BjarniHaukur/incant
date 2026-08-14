@@ -23,6 +23,11 @@ amplitude meter turned the palette up. Dragging the window accelerates the shell
 while the fluid lags behind it. Connecting, finishing, success and error only
 re-tint the same simulation.
 
+Every session rolls a new 32-bit salt, and the shader derives the whole character
+of the fluid from it — where the dye sheets lie, how thick they are, which way
+they drift, how fast the dye dissipates, and the random swirl the fluid starts
+from. No two dictations open the same way.
+
 ## Build
 
 ```sh
