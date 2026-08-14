@@ -18,12 +18,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var level: CGFloat = 0
     @Published var bufferedText = ""
     @Published private(set) var autoInsertEnabled = true
+    @Published private(set) var orbMotion = SIMD2<Float>.zero
+    @Published private(set) var orbMotionEnergy: Float = 0
+    @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
+    @Published private(set) var shortcutError: String?
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
 
     var showRecorder: (() -> Void)?
     var hideRecorder: (() -> Void)?
     var showSettings: (() -> Void)?
+    var beginRecorderDrag: (() -> Void)?
+    var moveRecorder: ((CGSize) -> Void)?
+    var applyShortcut: ((GlobalHotKey.Shortcut) -> String?)?
 
     private let audio = AudioCapture()
     private let transcriber = RealtimeTranscriber()
@@ -32,7 +39,10 @@ final class AppModel: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
     private var targetTrackingTask: Task<Void, Never>?
+    private var motionDecayTask: Task<Void, Never>?
     private var insertionTarget: TextInserter.Target?
+    private var lastDragTranslation = CGSize.zero
+    private var lastDragTime = Date.timeIntervalSinceReferenceDate
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -59,7 +69,7 @@ final class AppModel: ObservableObject {
         case .connecting, .listening:
             stopRecording()
         case .finishing:
-            break
+            dismissFinishingSession()
         }
     }
 
@@ -76,6 +86,20 @@ final class AppModel: ObservableObject {
         } catch {
             keySaved = false
         }
+    }
+
+    func updateShortcut(_ shortcut: GlobalHotKey.Shortcut) {
+        if let error = applyShortcut?(shortcut) {
+            shortcutError = error
+            return
+        }
+        self.shortcut = shortcut
+        shortcut.save()
+        shortcutError = nil
+    }
+
+    func openSettings() {
+        showSettings?()
     }
 
     func requestAccessibility() {
@@ -96,6 +120,53 @@ final class AppModel: ObservableObject {
         guard !bufferedText.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(bufferedText, forType: .string)
+    }
+
+    func beginOrbDrag() {
+        lastDragTranslation = .zero
+        lastDragTime = Date.timeIntervalSinceReferenceDate
+        beginRecorderDrag?()
+    }
+
+    func dragOrb(to translation: CGSize) {
+        moveRecorder?(translation)
+        let now = Date.timeIntervalSinceReferenceDate
+        let elapsed = max(now - lastDragTime, 1.0 / 240.0)
+        let delta = CGSize(
+            width: translation.width - lastDragTranslation.width,
+            height: translation.height - lastDragTranslation.height
+        )
+        lastDragTranslation = translation
+        lastDragTime = now
+
+        injectWindowMotion(delta: delta, elapsed: elapsed)
+    }
+
+    func injectWindowMotion(delta: CGSize, elapsed: TimeInterval) {
+        let distance = hypot(delta.width, delta.height)
+        guard distance > 0.15 else { return }
+        let direction = SIMD2<Float>(Float(delta.width / distance), Float(delta.height / distance))
+        let speed = Float(distance / elapsed)
+        orbMotion = simd_normalize(orbMotion * 0.22 + direction * 0.78)
+        orbMotionEnergy = max(orbMotionEnergy * 0.68, min(1.25, speed / 780))
+        decayOrbMotion()
+    }
+
+    func endOrbDrag() {
+        decayOrbMotion()
+    }
+
+    private func decayOrbMotion() {
+        motionDecayTask?.cancel()
+        motionDecayTask = Task { [weak self] in
+            while !Task.isCancelled, let self, self.orbMotionEnergy > 0.004 {
+                try? await Task.sleep(for: .milliseconds(16))
+                guard !Task.isCancelled else { return }
+                self.orbMotionEnergy *= 0.935
+            }
+            self?.orbMotionEnergy = 0
+            self?.orbMotion = .zero
+        }
     }
 
     func startVisualPreview(showPanel: Bool = true) {
@@ -178,6 +249,11 @@ final class AppModel: ObservableObject {
     }
 
     private func stopRecording() {
+        // Perceived latency matters more than network teardown here. Remove
+        // the surface on the hotkey edge, then finish the Realtime session in
+        // the background.
+        hideRecorder?()
+        NSApplication.shared.dockTile.badgeLabel = nil
         audio.stop()
         level = 0
         phase = .finishing
@@ -206,6 +282,10 @@ final class AppModel: ObservableObject {
         }
 
         if !bufferedText.isEmpty {
+            if !autoInsertEnabled {
+                completeTranscription()
+                return
+            }
             phase = .finishing
             if autoInsertEnabled { ensureBufferFlushLoop() }
             return
@@ -225,6 +305,15 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.settleToIdle()
         }
+        Task { await transcriber.disconnect() }
+    }
+
+    private func dismissFinishingSession() {
+        hideRecorder?()
+        finishTimeout?.cancel()
+        bufferFlushTask?.cancel()
+        bufferFlushTask = nil
+        settleToIdle()
         Task { await transcriber.disconnect() }
     }
 

@@ -25,7 +25,7 @@ struct BufferedTranscriptEditor: NSViewRepresentable {
         editor.textColor = NSColor.white.withAlphaComponent(0.9)
         editor.insertionPointColor = .systemBlue
         editor.font = .systemFont(ofSize: 12, weight: .regular)
-        editor.textContainerInset = NSSize(width: 32, height: 5)
+        editor.textContainerInset = NSSize(width: 7, height: 5)
         editor.minSize = NSSize(width: 0, height: 0)
         editor.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,

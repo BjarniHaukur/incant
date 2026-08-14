@@ -25,7 +25,12 @@ struct MetalFluidOrbView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
-        context.coordinator.renderer?.state = .init(phase: model.phase, energy: Float(model.level))
+        context.coordinator.renderer?.state = .init(
+            phase: model.phase,
+            energy: Float(model.level),
+            motion: model.orbMotion,
+            motionEnergy: model.orbMotionEnergy
+        )
     }
 
     final class Coordinator {
@@ -37,9 +42,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     struct VisualState {
         var phase: UInt32
         var energy: Float
+        var motion: SIMD2<Float>
+        var motionEnergy: Float
 
-        init(phase: AppModel.Phase, energy: Float) {
+        init(phase: AppModel.Phase, energy: Float, motion: SIMD2<Float>, motionEnergy: Float) {
             self.energy = energy
+            self.motion = motion
+            self.motionEnergy = motionEnergy
             switch phase {
             case .idle, .listening: self.phase = 0
             case .connecting: self.phase = 1
@@ -57,9 +66,12 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var phase: UInt32
         var simSize: SIMD2<Float>
         var outputSize: SIMD2<Float>
+        var motion: SIMD2<Float>
+        var motionEnergy: Float
+        var padding: Float = 0
     }
 
-    var state = VisualState(phase: .idle, energy: 0)
+    var state = VisualState(phase: .idle, energy: 0, motion: .zero, motionEnergy: 0)
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -146,7 +158,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
                 energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
                 phase: state.phase,
                 simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
-                outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height))
+                outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
+                motion: state.motion,
+                motionEnergy: state.motionEnergy
             )
             encodeSimulation(commandBuffer, uniforms: &uniforms)
         }
@@ -157,7 +171,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
             phase: state.phase,
             simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
-            outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height))
+            outputSize: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
+            motion: state.motion,
+            motionEnergy: state.motionEnergy
         )
         encode(
             commandBuffer, pipeline: display,
@@ -221,6 +237,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         uint phase;
         float2 simSize;
         float2 outputSize;
+        float2 motion;
+        float motionEnergy;
+        float padding;
     };
 
     constexpr sampler fluidSampler(coord::normalized, address::clamp_to_edge, filter::linear);
@@ -259,6 +278,19 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 p = (uv - .5) * 2.0;
         float stateGain = u.phase == 1 ? .6 + .4 * sin(u.time * 2.4) : 1.0;
         advected += curlField(p, u.time, u.energy) * u.dt * stateGain;
+
+        // Moving the window accelerates its glass shell while the fluid lags
+        // behind. A soft spatial envelope turns that inertia into pressure;
+        // paired, noisy transverse wakes keep the response turbulent rather
+        // than sliding the texture rigidly across the sphere.
+        float2 drag = float2(u.motion.x, -u.motion.y);
+        float motionEnvelope = 1.0 - smoothstep(.62, 1.08, length(p));
+        float wake = sin(dot(p, float2(7.3, -5.1)) + u.time * 5.7)
+            * cos(dot(p, float2(3.9, 8.2)) - u.time * 3.8);
+        float2 transverse = float2(-drag.y, drag.x);
+        float2 inertialForce = -drag * (.34 + .18 * wake);
+        float2 turbulentWake = transverse * wake * .24;
+        advected += (inertialForce + turbulentWake) * u.motionEnergy * motionEnvelope * u.dt;
 
         float edge = length(p);
         if (edge > .72) advected -= p * smoothstep(.72, 1.0, edge) * .025;

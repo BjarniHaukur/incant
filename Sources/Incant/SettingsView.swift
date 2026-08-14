@@ -28,6 +28,10 @@ struct SettingsView: View {
                     apiKeyRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     accessibilityRow
+                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
+                    shortcutRow
+                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
+                    autoTypeRow
                 }
                 .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {
@@ -36,23 +40,17 @@ struct SettingsView: View {
                 }
                 .padding(.top, 28)
 
-                HStack(spacing: 10) {
-                    keycap("⌘")
-                    keycap("⇧")
-                    keycap("SPACE", wide: true)
-                }
-                .padding(.top, 24)
                 Text("Press once to speak · press again to stop")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.38))
-                    .padding(.top, 9)
+                    .padding(.top, 18)
 
                 Spacer(minLength: 22)
             }
             .padding(.horizontal, 34)
             .padding(.top, 12)
         }
-        .frame(width: 520, height: 650)
+        .frame(width: 520, height: 700)
         .preferredColorScheme(.dark)
         .onAppear { accessibilityGranted = TextInserter.isAccessibilityGranted }
         .onReceive(permissionTimer) { _ in accessibilityGranted = TextInserter.isAccessibilityGranted }
@@ -86,7 +84,7 @@ struct SettingsView: View {
                 Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.blue)
             }
         }
-        .padding(.horizontal, 16).frame(minHeight: 74)
+        .padding(.horizontal, 16).frame(minHeight: 68)
     }
 
     private var accessibilityRow: some View {
@@ -105,7 +103,41 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.cyan)
             }
         }
-        .padding(.horizontal, 16).frame(minHeight: 74)
+        .padding(.horizontal, 16).frame(minHeight: 68)
+    }
+
+    private var shortcutRow: some View {
+        HStack(spacing: 14) {
+            statusOrb(ready: model.shortcutError == nil, color: .purple)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Global shortcut").font(.system(size: 14, weight: .medium))
+                Text(model.shortcutError ?? "Toggle Incant from anywhere")
+                    .font(.caption)
+                    .foregroundStyle(model.shortcutError == nil ? .white.opacity(0.42) : .red.opacity(0.8))
+            }
+            Spacer()
+            ShortcutRecorder(shortcut: model.shortcut) { model.updateShortcut($0) }
+        }
+        .padding(.horizontal, 16).frame(minHeight: 64)
+    }
+
+    private var autoTypeRow: some View {
+        HStack(spacing: 14) {
+            statusOrb(ready: model.autoInsertEnabled, color: .blue)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Auto type").font(.system(size: 14, weight: .medium))
+                Text(model.autoInsertEnabled ? "Stream words at the cursor" : "Hold words in Incant for editing")
+                    .font(.caption).foregroundStyle(.white.opacity(0.42))
+            }
+            Spacer()
+            Button(model.autoInsertEnabled ? "On" : "Off") {
+                model.setAutoInsertEnabled(!model.autoInsertEnabled)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(model.autoInsertEnabled ? .blue : .gray)
+        }
+        .padding(.horizontal, 16).frame(minHeight: 64)
     }
 
     private func statusOrb(ready: Bool, color: Color) -> some View {
@@ -116,12 +148,4 @@ struct SettingsView: View {
             .frame(width: 24)
     }
 
-    private func keycap(_ text: String, wide: Bool = false) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.74))
-            .frame(width: wide ? 64 : 34, height: 30)
-            .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.09)) }
-    }
 }

@@ -20,7 +20,6 @@ actor RealtimeTranscriber {
         self.onDelta = onDelta
         self.onFinal = onFinal
         self.onError = onError
-
         // Transcription sessions are selected by intent; the speech-to-text
         // model itself belongs in session.audio.input.transcription.model.
         var request = URLRequest(url: URL(string: "wss://eu.api.openai.com/v1/realtime?intent=transcription")!)

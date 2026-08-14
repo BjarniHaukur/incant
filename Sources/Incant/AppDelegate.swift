@@ -2,11 +2,14 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let model = AppModel()
     private var hotKey: GlobalHotKey?
     private var recorderPanel: NSPanel?
     private var settingsWindow: NSWindow?
+    private var recorderDragOrigin = NSPoint.zero
+    private var settingsMotionOrigin = NSPoint.zero
+    private var settingsMotionTime = Date.timeIntervalSinceReferenceDate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
@@ -18,15 +21,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildSettingsWindow()
 
         do {
-            hotKey = try GlobalHotKey { [weak self] in
-                Task { @MainActor in self?.model.toggleRecording() }
-            }
+            hotKey = try makeHotKey(for: model.shortcut)
         } catch {
             showShortcutError(error.localizedDescription)
         }
         model.showRecorder = { [weak self] in self?.showRecorder() }
         model.hideRecorder = { [weak self] in self?.hideRecorder() }
         model.showSettings = { [weak self] in self?.showSettings() }
+        model.beginRecorderDrag = { [weak self] in
+            guard let self, let panel = self.recorderPanel else { return }
+            self.recorderDragOrigin = panel.frame.origin
+        }
+        model.moveRecorder = { [weak self] translation in
+            guard let self, let panel = self.recorderPanel else { return }
+            panel.setFrameOrigin(NSPoint(
+                x: self.recorderDragOrigin.x + translation.width,
+                y: self.recorderDragOrigin.y - translation.height
+            ))
+        }
+        model.applyShortcut = { [weak self] shortcut in
+            self?.replaceHotKey(with: shortcut)
+        }
 
         if CommandLine.arguments.contains("--preview-orb") {
             settingsWindow?.orderOut(nil)
@@ -79,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildSettingsWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 650),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 700),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -89,8 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.backgroundColor = NSColor(red: 0.005, green: 0.008, blue: 0.02, alpha: 1)
         window.isReleasedWhenClosed = false
+        window.isMovableByWindowBackground = true
         window.contentView = NSHostingView(rootView: SettingsView(model: model))
         window.center()
+        window.delegate = self
+        settingsMotionOrigin = window.frame.origin
+        settingsMotionTime = Date.timeIntervalSinceReferenceDate
         settingsWindow = window
     }
 
@@ -113,7 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hideRecorder() {
         guard let panel = recorderPanel else { return }
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.2
+            context.duration = 0.075
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 0
         }, completionHandler: {
             panel.orderOut(nil)
@@ -122,7 +142,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         NSApplication.shared.activate(ignoringOtherApps: true)
+        recorderPanel?.orderOut(nil)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        let origin = window.frame.origin
+        let delta = CGSize(
+            width: origin.x - settingsMotionOrigin.x,
+            height: -(origin.y - settingsMotionOrigin.y)
+        )
+        let elapsed = max(now - settingsMotionTime, 1.0 / 240.0)
+        settingsMotionOrigin = origin
+        settingsMotionTime = now
+        model.injectWindowMotion(delta: delta, elapsed: elapsed)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        if model.phase == .connecting || model.phase == .listening {
+            showRecorder()
+        }
+    }
+
+    private func makeHotKey(for shortcut: GlobalHotKey.Shortcut) throws -> GlobalHotKey {
+        try GlobalHotKey(shortcut: shortcut) { [weak self] in
+            Task { @MainActor in self?.model.toggleRecording() }
+        }
+    }
+
+    private func replaceHotKey(with shortcut: GlobalHotKey.Shortcut) -> String? {
+        let previous = model.shortcut
+        hotKey = nil
+        do {
+            hotKey = try makeHotKey(for: shortcut)
+            return nil
+        } catch {
+            hotKey = try? makeHotKey(for: previous)
+            return error.localizedDescription
+        }
     }
 
     private func showShortcutError(_ message: String) {

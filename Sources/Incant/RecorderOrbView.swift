@@ -8,6 +8,7 @@ struct RecorderOrbView: View {
     @State private var composerHovered = false
     @State private var copied = false
     @State private var composerHeight: CGFloat = 36
+    @State private var draggingOrb = false
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -21,7 +22,23 @@ struct RecorderOrbView: View {
                         .scaleEffect(orbScale(at: time))
                 }
                 .frame(width: canvasSize, height: canvasSize)
-                .allowsHitTesting(false)
+                .contentShape(Circle())
+                .gesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in
+                            guard showsBufferedText else { return }
+                            if !draggingOrb {
+                                draggingOrb = true
+                                model.beginOrbDrag()
+                            }
+                            model.dragOrb(to: value.translation)
+                        }
+                        .onEnded { _ in
+                            guard showsBufferedText else { return }
+                            draggingOrb = false
+                            model.endOrbDrag()
+                        }
+                )
 
                 if showsBufferedText {
                     transcriptComposer
@@ -34,47 +51,40 @@ struct RecorderOrbView: View {
     }
 
     private var transcriptComposer: some View {
-        ZStack {
-            BufferedTranscriptEditor(text: $model.bufferedText, contentHeight: $composerHeight)
-                .frame(width: 272, height: composerHeight)
-
-            HStack {
-                hoverButton(
-                    systemName: model.autoInsertEnabled ? "text.cursor" : "pause.fill",
-                    active: model.autoInsertEnabled,
-                    help: model.autoInsertEnabled
-                        ? "Auto type is on — click to hold text in Incant"
-                        : "Auto type is off — click to type the draft at the cursor"
-                ) {
-                    model.setAutoInsertEnabled(!model.autoInsertEnabled)
-                }
-
-                Spacer()
-
-                hoverButton(
-                    systemName: copied ? "checkmark" : "doc.on.doc",
-                    active: copied,
-                    help: "Copy transcript"
-                ) {
-                    model.copyBufferedText()
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(900))
-                        copied = false
-                    }
-                }
-                .disabled(model.bufferedText.isEmpty)
+        HStack(spacing: 7) {
+            hoverButton(
+                systemName: "gearshape.fill",
+                active: false,
+                help: "Open Incant settings"
+            ) {
+                model.openSettings()
             }
-            .padding(.horizontal, 7)
-            .opacity(composerHovered ? 1 : 0)
+
+            BufferedTranscriptEditor(text: $model.bufferedText, contentHeight: $composerHeight)
+                .frame(width: 232, height: composerHeight)
+                .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.blue.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.24), radius: 12, y: 5)
+
+            hoverButton(
+                systemName: copied ? "checkmark" : "doc.on.doc",
+                active: copied,
+                help: "Copy transcript"
+            ) {
+                model.copyBufferedText()
+                copied = true
+                Task {
+                    try? await Task.sleep(for: .milliseconds(900))
+                    copied = false
+                }
+            }
+            .disabled(model.bufferedText.isEmpty)
         }
-        .frame(width: 284, height: composerHeight + 10)
-        .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.blue.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.24), radius: 12, y: 5)
+        .frame(width: 290, height: composerHeight + 10)
+        .opacity(composerHovered ? 1 : 0.88)
         .animation(.easeOut(duration: 0.15), value: composerHovered)
         .animation(.spring(response: 0.25, dampingFraction: 0.86), value: composerHeight)
         .onHover { composerHovered = $0 }
@@ -87,19 +97,26 @@ struct RecorderOrbView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(active ? Color.cyan : Color.white.opacity(0.7))
-                .frame(width: 24, height: 24)
-                .background(
-                    active ? Color.blue.opacity(0.2) : Color.white.opacity(0.055),
-                    in: Circle()
-                )
-                .overlay {
-                    Circle().stroke(active ? Color.cyan.opacity(0.32) : .white.opacity(0.06))
-                }
+            ZStack {
+                Circle()
+                    .fill(RadialGradient(
+                        colors: active
+                            ? [Color.cyan.opacity(0.5), Color.blue.opacity(0.32), Color.black.opacity(0.9)]
+                            : [Color.white.opacity(0.18), Color.blue.opacity(0.1), Color.black.opacity(0.92)],
+                        center: UnitPoint(x: 0.36, y: 0.28),
+                        startRadius: 0,
+                        endRadius: 13
+                    ))
+                Image(systemName: systemName)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(active ? Color.white.opacity(0.94) : Color.white.opacity(0.66))
+            }
+            .frame(width: 20, height: 20)
+            .overlay { Circle().stroke(.white.opacity(active ? 0.24 : 0.09), lineWidth: 0.7) }
+            .shadow(color: active ? Color.cyan.opacity(0.28) : .black.opacity(0.5), radius: 5)
         }
         .buttonStyle(.plain)
+        .opacity(composerHovered ? 1 : 0)
         .help(help)
     }
 

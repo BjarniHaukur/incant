@@ -2,14 +2,48 @@ import Carbon.HIToolbox
 import Foundation
 
 final class GlobalHotKey {
+    struct Shortcut: Codable, Equatable {
+        var keyCode: UInt32
+        var modifiers: UInt32
+        var key: String
+
+        static let standard = Shortcut(
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(cmdKey | shiftKey),
+            key: "Space"
+        )
+
+        var displayName: String {
+            var symbols = ""
+            if modifiers & UInt32(controlKey) != 0 { symbols += "⌃" }
+            if modifiers & UInt32(optionKey) != 0 { symbols += "⌥" }
+            if modifiers & UInt32(shiftKey) != 0 { symbols += "⇧" }
+            if modifiers & UInt32(cmdKey) != 0 { symbols += "⌘" }
+            return symbols + key
+        }
+
+        static func load() -> Shortcut {
+            guard let data = UserDefaults.standard.data(forKey: "dictationShortcut"),
+                  let shortcut = try? JSONDecoder().decode(Shortcut.self, from: data) else {
+                return .standard
+            }
+            return shortcut
+        }
+
+        func save() {
+            guard let data = try? JSONEncoder().encode(self) else { return }
+            UserDefaults.standard.set(data, forKey: "dictationShortcut")
+        }
+    }
+
     struct RegistrationError: LocalizedError {
         let status: OSStatus
 
         var errorDescription: String? {
             if status == OSStatus(eventHotKeyExistsErr) {
-                return "Command-Shift-Space is already used by another app."
+                return "That shortcut is already used by another app."
             }
-            return "Could not register Command-Shift-Space (\(status))."
+            return "Could not register the shortcut (\(status))."
         }
     }
 
@@ -17,7 +51,7 @@ final class GlobalHotKey {
     private var handlerRef: EventHandlerRef?
     private let action: () -> Void
 
-    init(action: @escaping () -> Void) throws {
+    init(shortcut: Shortcut = .load(), action: @escaping () -> Void) throws {
         self.action = action
 
         var eventType = EventTypeSpec(
@@ -41,8 +75,8 @@ final class GlobalHotKey {
 
         let identifier = EventHotKeyID(signature: 0x50545950, id: 1) // PTYP
         let status = RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(cmdKey | shiftKey),
+            shortcut.keyCode,
+            shortcut.modifiers,
             identifier,
             GetApplicationEventTarget(),
             0,
