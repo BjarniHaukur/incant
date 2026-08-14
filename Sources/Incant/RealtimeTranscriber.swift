@@ -12,6 +12,7 @@ actor RealtimeTranscriber {
 
     func connect(
         apiKey: String,
+        keywords: [String],
         onDelta: @escaping @Sendable (String) -> Void,
         onFinal: @escaping @Sendable (String) -> Void,
         onError: @escaping @Sendable (String) -> Void
@@ -31,6 +32,14 @@ actor RealtimeTranscriber {
         socket.resume()
 
         receiveTask = Task { [weak self] in await self?.receiveLoop() }
+        var transcription: [String: Any] = [
+            "model": "gpt-live-transcribe",
+            "delay": "low",
+        ]
+        if !keywords.isEmpty {
+            transcription["keywords"] = keywords
+        }
+
         try await send([
             "type": "session.update",
             "session": [
@@ -38,10 +47,7 @@ actor RealtimeTranscriber {
                 "audio": [
                     "input": [
                         "format": ["type": "audio/pcm", "rate": 24_000],
-                        "transcription": [
-                            "model": "gpt-live-transcribe",
-                            "delay": "low",
-                        ],
+                        "transcription": transcription,
                         "turn_detection": NSNull(),
                     ]
                 ]

@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var orbMotionEnergy: Float = 0
     @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
     @Published private(set) var shortcutError: String?
+    @Published private(set) var keywords = AppModel.loadKeywords()
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
 
@@ -44,6 +45,13 @@ final class AppModel: ObservableObject {
     var hasAPIKey: Bool { KeychainStore.load() != nil }
     var usesEnvironmentKey: Bool { KeychainStore.environmentKey() != nil }
     var bufferedTextPreview: String { String(bufferedText.suffix(260)) }
+    var keywordSummary: String {
+        switch keywords.count {
+        case 0: return "Help Incant recognize names and terms"
+        case 1: return "1 saved term"
+        default: return "\(keywords.count) saved terms"
+        }
+    }
 
     var statusText: String {
         switch phase {
@@ -80,6 +88,17 @@ final class AppModel: ObservableObject {
         } catch {
             keySaved = false
         }
+    }
+
+    func saveKeywords(_ text: String) {
+        let cleaned = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains("<") && !$0.contains(">") }
+
+        var seen = Set<String>()
+        keywords = cleaned.filter { seen.insert($0.localizedLowercase).inserted }
+        UserDefaults.standard.set(keywords, forKey: Self.keywordsDefaultsKey)
     }
 
     func updateShortcut(_ shortcut: GlobalHotKey.Shortcut) {
@@ -187,6 +206,7 @@ final class AppModel: ObservableObject {
             do {
                 try await transcriber.connect(
                     apiKey: apiKey,
+                    keywords: keywords,
                     onDelta: { [weak self] delta in
                         Task { @MainActor in self?.receivedDelta(delta) }
                     },
@@ -353,5 +373,11 @@ final class AppModel: ObservableObject {
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil
         hideRecorder?()
+    }
+
+    private static let keywordsDefaultsKey = "transcriptionKeywords"
+
+    private static func loadKeywords() -> [String] {
+        UserDefaults.standard.stringArray(forKey: keywordsDefaultsKey) ?? []
     }
 }

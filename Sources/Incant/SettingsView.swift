@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var accessibilityGranted = false
+    @State private var showingVocabulary = false
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -17,8 +18,8 @@ struct SettingsView: View {
             )
 
             VStack(spacing: 0) {
-                RecorderOrbView(model: model, orbDiameter: 220, canvasSize: 270, showsBufferedText: false)
-                    .frame(height: 250)
+                RecorderOrbView(model: model, orbDiameter: 208, canvasSize: 252, showsBufferedText: false)
+                    .frame(height: 234)
 
                 Text("Incant")
                     .font(.system(size: 34, weight: .semibold, design: .rounded))
@@ -30,6 +31,8 @@ struct SettingsView: View {
                     accessibilityRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     shortcutRow
+                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
+                    vocabularyRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     autoTypeRow
                 }
@@ -54,6 +57,9 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
         .onAppear { accessibilityGranted = TextInserter.isAccessibilityGranted }
         .onReceive(permissionTimer) { _ in accessibilityGranted = TextInserter.isAccessibilityGranted }
+        .sheet(isPresented: $showingVocabulary) {
+            VocabularyEditor(model: model)
+        }
     }
 
     @ViewBuilder
@@ -140,6 +146,26 @@ struct SettingsView: View {
         .padding(.horizontal, 16).frame(minHeight: 64)
     }
 
+    private var vocabularyRow: some View {
+        Button { showingVocabulary = true } label: {
+            HStack(spacing: 14) {
+                statusOrb(ready: !model.keywords.isEmpty, color: .indigo)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Vocabulary").font(.system(size: 14, weight: .medium))
+                    Text(model.keywordSummary)
+                        .font(.caption).foregroundStyle(.white.opacity(0.42))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16).frame(minHeight: 64)
+    }
+
     private func statusOrb(ready: Bool, color: Color) -> some View {
         Circle()
             .fill(ready ? color : .white.opacity(0.12))
@@ -148,4 +174,52 @@ struct SettingsView: View {
             .frame(width: 24)
     }
 
+}
+
+private struct VocabularyEditor: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Vocabulary")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                Text("Add names, acronyms, and terms you say often — one per line.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            TextEditor(text: $draft)
+                .font(.system(size: 14, design: .rounded))
+                .scrollContentBackground(.hidden)
+                .padding(10)
+                .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(.white.opacity(0.09), lineWidth: 1)
+                }
+
+            HStack {
+                Text("Used as recognition hints; spelling and casing are preserved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    model.saveKeywords(draft)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 480, height: 390)
+        .background(Color(red: 0.008, green: 0.012, blue: 0.026))
+        .preferredColorScheme(.dark)
+        .onAppear { draft = model.keywords.joined(separator: "\n") }
+    }
 }
