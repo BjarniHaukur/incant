@@ -28,8 +28,6 @@ final class AppModel: ObservableObject {
     var showRecorder: (() -> Void)?
     var hideRecorder: (() -> Void)?
     var showSettings: (() -> Void)?
-    var beginRecorderDrag: (() -> Void)?
-    var moveRecorder: ((CGSize) -> Void)?
     var applyShortcut: ((GlobalHotKey.Shortcut) -> String?)?
 
     private let audio = AudioCapture()
@@ -41,8 +39,6 @@ final class AppModel: ObservableObject {
     private var targetTrackingTask: Task<Void, Never>?
     private var motionDecayTask: Task<Void, Never>?
     private var insertionTarget: TextInserter.Target?
-    private var lastDragTranslation = CGSize.zero
-    private var lastDragTime = Date.timeIntervalSinceReferenceDate
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -122,37 +118,13 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.setString(bufferedText, forType: .string)
     }
 
-    func beginOrbDrag() {
-        lastDragTranslation = .zero
-        lastDragTime = Date.timeIntervalSinceReferenceDate
-        beginRecorderDrag?()
-    }
-
-    func dragOrb(to translation: CGSize) {
-        moveRecorder?(translation)
-        let now = Date.timeIntervalSinceReferenceDate
-        let elapsed = max(now - lastDragTime, 1.0 / 240.0)
-        let delta = CGSize(
-            width: translation.width - lastDragTranslation.width,
-            height: translation.height - lastDragTranslation.height
-        )
-        lastDragTranslation = translation
-        lastDragTime = now
-
-        injectWindowMotion(delta: delta, elapsed: elapsed)
-    }
-
     func injectWindowMotion(delta: CGSize, elapsed: TimeInterval) {
         let distance = hypot(delta.width, delta.height)
         guard distance > 0.15 else { return }
         let direction = SIMD2<Float>(Float(delta.width / distance), Float(delta.height / distance))
         let speed = Float(distance / elapsed)
         orbMotion = simd_normalize(orbMotion * 0.22 + direction * 0.78)
-        orbMotionEnergy = max(orbMotionEnergy * 0.68, min(1.25, speed / 780))
-        decayOrbMotion()
-    }
-
-    func endOrbDrag() {
+        orbMotionEnergy = max(orbMotionEnergy * 0.72, min(1.8, speed / 430))
         decayOrbMotion()
     }
 
@@ -162,7 +134,7 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled, let self, self.orbMotionEnergy > 0.004 {
                 try? await Task.sleep(for: .milliseconds(16))
                 guard !Task.isCancelled else { return }
-                self.orbMotionEnergy *= 0.935
+                self.orbMotionEnergy *= 0.952
             }
             self?.orbMotionEnergy = 0
             self?.orbMotion = .zero

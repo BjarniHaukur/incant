@@ -7,9 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hotKey: GlobalHotKey?
     private var recorderPanel: NSPanel?
     private var settingsWindow: NSWindow?
-    private var recorderDragOrigin = NSPoint.zero
-    private var settingsMotionOrigin = NSPoint.zero
-    private var settingsMotionTime = Date.timeIntervalSinceReferenceDate
+    private var motionSamples: [ObjectIdentifier: (origin: NSPoint, time: TimeInterval)] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
@@ -28,17 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model.showRecorder = { [weak self] in self?.showRecorder() }
         model.hideRecorder = { [weak self] in self?.hideRecorder() }
         model.showSettings = { [weak self] in self?.showSettings() }
-        model.beginRecorderDrag = { [weak self] in
-            guard let self, let panel = self.recorderPanel else { return }
-            self.recorderDragOrigin = panel.frame.origin
-        }
-        model.moveRecorder = { [weak self] translation in
-            guard let self, let panel = self.recorderPanel else { return }
-            panel.setFrameOrigin(NSPoint(
-                x: self.recorderDragOrigin.x + translation.width,
-                y: self.recorderDragOrigin.y - translation.height
-            ))
-        }
         model.applyShortcut = { [weak self] shortcut in
             self?.replaceHotKey(with: shortcut)
         }
@@ -88,8 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
+        panel.delegate = self
         panel.contentView = NSHostingView(rootView: RecorderOrbView(model: model))
         recorderPanel = panel
+        rememberMotionSample(for: panel)
     }
 
     private func buildSettingsWindow() {
@@ -108,9 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: SettingsView(model: model))
         window.center()
         window.delegate = self
-        settingsMotionOrigin = window.frame.origin
-        settingsMotionTime = Date.timeIntervalSinceReferenceDate
         settingsWindow = window
+        rememberMotionSample(for: window)
     }
 
     private func showRecorder() {
@@ -121,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             y: frame.minY + 86
         )
         panel.setFrameOrigin(origin)
+        rememberMotionSample(for: panel)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -147,17 +136,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        guard let window = notification.object as? NSWindow,
+              window === settingsWindow || window === recorderPanel else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let origin = window.frame.origin
+        let id = ObjectIdentifier(window)
+        guard let sample = motionSamples[id] else {
+            rememberMotionSample(for: window)
+            return
+        }
         let delta = CGSize(
-            width: origin.x - settingsMotionOrigin.x,
-            height: -(origin.y - settingsMotionOrigin.y)
+            width: origin.x - sample.origin.x,
+            height: -(origin.y - sample.origin.y)
         )
-        let elapsed = max(now - settingsMotionTime, 1.0 / 240.0)
-        settingsMotionOrigin = origin
-        settingsMotionTime = now
+        let elapsed = max(now - sample.time, 1.0 / 240.0)
+        motionSamples[id] = (origin, now)
         model.injectWindowMotion(delta: delta, elapsed: elapsed)
+    }
+
+    private func rememberMotionSample(for window: NSWindow) {
+        motionSamples[ObjectIdentifier(window)] = (
+            window.frame.origin,
+            Date.timeIntervalSinceReferenceDate
+        )
     }
 
     func windowWillClose(_ notification: Notification) {

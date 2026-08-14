@@ -8,7 +8,6 @@ struct RecorderOrbView: View {
     @State private var composerHovered = false
     @State private var copied = false
     @State private var composerHeight: CGFloat = 36
-    @State private var draggingOrb = false
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -20,25 +19,12 @@ struct RecorderOrbView: View {
                         .frame(width: orbDiameter, height: orbDiameter)
                         .clipShape(Circle())
                         .scaleEffect(orbScale(at: time))
+                    WindowDragSurface()
+                        .frame(width: orbDiameter, height: orbDiameter)
+                        .clipShape(Circle())
                 }
                 .frame(width: canvasSize, height: canvasSize)
                 .contentShape(Circle())
-                .gesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            guard showsBufferedText else { return }
-                            if !draggingOrb {
-                                draggingOrb = true
-                                model.beginOrbDrag()
-                            }
-                            model.dragOrb(to: value.translation)
-                        }
-                        .onEnded { _ in
-                            guard showsBufferedText else { return }
-                            draggingOrb = false
-                            model.endOrbDrag()
-                        }
-                )
 
                 if showsBufferedText {
                     transcriptComposer
@@ -51,7 +37,8 @@ struct RecorderOrbView: View {
     }
 
     private var transcriptComposer: some View {
-        HStack(spacing: 7) {
+        let hasText = !model.bufferedText.isEmpty
+        return HStack(spacing: 7) {
             hoverButton(
                 systemName: "gearshape.fill",
                 active: false,
@@ -60,14 +47,11 @@ struct RecorderOrbView: View {
                 model.openSettings()
             }
 
-            BufferedTranscriptEditor(text: $model.bufferedText, contentHeight: $composerHeight)
-                .frame(width: 232, height: composerHeight)
-                .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.blue.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(0.24), radius: 12, y: 5)
+            transcriptField
+                .frame(width: hasText ? 232 : 0)
+                .opacity(hasText ? 1 : 0)
+                .clipped()
+                .allowsHitTesting(hasText)
 
             hoverButton(
                 systemName: copied ? "checkmark" : "doc.on.doc",
@@ -87,7 +71,19 @@ struct RecorderOrbView: View {
         .opacity(composerHovered ? 1 : 0.88)
         .animation(.easeOut(duration: 0.15), value: composerHovered)
         .animation(.spring(response: 0.25, dampingFraction: 0.86), value: composerHeight)
+        .animation(.spring(response: 0.36, dampingFraction: 0.78), value: hasText)
         .onHover { composerHovered = $0 }
+    }
+
+    private var transcriptField: some View {
+        BufferedTranscriptEditor(text: $model.bufferedText, contentHeight: $composerHeight)
+            .frame(width: 232, height: composerHeight)
+            .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.blue.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
+            }
+            .shadow(color: Color.blue.opacity(composerHovered ? 0.09 : 0.03), radius: 16)
     }
 
     private func hoverButton(

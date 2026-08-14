@@ -288,9 +288,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float wake = sin(dot(p, float2(7.3, -5.1)) + u.time * 5.7)
             * cos(dot(p, float2(3.9, 8.2)) - u.time * 3.8);
         float2 transverse = float2(-drag.y, drag.x);
-        float2 inertialForce = -drag * (.34 + .18 * wake);
-        float2 turbulentWake = transverse * wake * .24;
-        advected += (inertialForce + turbulentWake) * u.motionEnergy * motionEnvelope * u.dt;
+        float2 inertialForce = -drag * (.9 + .42 * wake);
+        float2 turbulentWake = transverse * wake * .7;
+        advected += (inertialForce + turbulentWake) * u.motionEnergy * motionEnvelope * u.dt * 1.35;
 
         float edge = length(p);
         if (edge > .72) advected -= p * smoothstep(.72, 1.0, edge) * .025;
