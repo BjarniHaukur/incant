@@ -18,7 +18,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var level: CGFloat = 0
     @Published var bufferedText = ""
     @Published private(set) var autoInsertEnabled = true
-    @Published private(set) var hasInsertionTarget = false
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
 
@@ -93,10 +92,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func insertBufferedText() {
-        flushBufferedTextIfPossible(force: true)
-    }
-
     func copyBufferedText() {
         guard !bufferedText.isEmpty else { return }
         NSPasteboard.general.clearContents()
@@ -139,7 +134,6 @@ final class AppModel: ObservableObject {
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
         insertionTarget = TextInserter.captureTarget()
-        hasInsertionTarget = insertionTarget != nil
         startTargetTracking()
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
@@ -245,7 +239,6 @@ final class AppModel: ObservableObject {
         guard !bufferedText.isEmpty else { return }
         if let currentTarget = TextInserter.captureTarget() {
             insertionTarget = currentTarget
-            hasInsertionTarget = true
         }
         let pending = bufferedText
         switch TextInserter.insertLive(pending, target: insertionTarget) {
@@ -272,7 +265,6 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 if let target = TextInserter.captureTarget() {
                     self?.insertionTarget = target
-                    self?.hasInsertionTarget = true
                 }
                 try? await Task.sleep(for: .milliseconds(140))
             }
@@ -314,7 +306,6 @@ final class AppModel: ObservableObject {
         targetTrackingTask?.cancel()
         targetTrackingTask = nil
         insertionTarget = nil
-        hasInsertionTarget = false
         phase = .idle
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil
