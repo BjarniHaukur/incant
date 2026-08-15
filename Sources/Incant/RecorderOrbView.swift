@@ -121,10 +121,10 @@ struct RecorderOrbView: View {
         let irregularBreath = sin(time * 0.73) * sin(time * 0.41 + 1.7)
         let loading = model.phase == .connecting ? 0.5 + 0.5 * sin(time * 2.4) : 0
         return Circle()
-            .fill(glowColor.opacity(glowOpacity + voice * 0.035 + loading * 0.06))
+            .fill(glowColor.opacity(glowOpacity + voice * 0.16 + loading * 0.06))
             .frame(width: orbDiameter * 1.06, height: orbDiameter * 1.06)
-            .blur(radius: 22 - voice * 2)
-            .scaleEffect(1 + irregularBreath * 0.012 + voice * 0.025 + loading * 0.025)
+            .blur(radius: 22 - voice * 5)
+            .scaleEffect(1 + irregularBreath * 0.012 + voice * 0.07 + loading * 0.025)
     }
 
     private func orbScale(at time: TimeInterval) -> CGFloat {

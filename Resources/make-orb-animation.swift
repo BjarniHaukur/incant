@@ -62,6 +62,7 @@ struct Uniforms {
     var phaseOffset: Float
     var vorticity: Float
     var dyeSeedAmount: Float
+    var impulse: Float
 }
 
 // The app rolls a fresh seed for every session. The README keeps one fixed roll
@@ -157,11 +158,23 @@ var orbBytes = [UInt8](repeating: 0, count: orbBytesPerRow * orbPixels)
 var renderedFrames: [[Float]] = []
 let totalFrames = loopFrames + crossfadeFrames
 
+/// MetalFluidRenderer.trackVoice, run forward from t = 0 so the rendered
+/// animation reacts to the synthetic voice exactly as the app does to a real one.
+var envelope: Float = 0
+var impulse: Float = 0
+func trackVoice(at time: Float, dt: Float) {
+    let level = max(voiceLevel(at: time), 0.015)
+    let onset = max(0, level - envelope)
+    let rate: Float = level > envelope ? 26 : 5.5
+    envelope += (level - envelope) * min(1, dt * rate)
+    impulse = max(impulse * pow(0.02, dt), min(1, onset * 3.4))
+}
+
 func makeUniforms(dt: Float, time: Float) -> Uniforms {
     Uniforms(
         dt: dt,
         time: time,
-        energy: max(voiceLevel(at: time), 0.015),
+        energy: max(envelope, 0.015),
         phase: 0,
         simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
         outputSize: SIMD2(Float(orbPixels), Float(orbPixels)),
@@ -170,7 +183,8 @@ func makeUniforms(dt: Float, time: Float) -> Uniforms {
         salt: salt,
         phaseOffset: 0,
         vorticity: vorticity,
-        dyeSeedAmount: dyeSeedAmount
+        dyeSeedAmount: dyeSeedAmount,
+        impulse: impulse
     )
 }
 
@@ -190,6 +204,7 @@ do {
 
 for step in 0..<(prerollFrames + totalFrames) {
     let time = Float(step) * dt
+    trackVoice(at: time, dt: dt)
     var uniforms = makeUniforms(dt: dt, time: time)
     guard let buffer = queue.makeCommandBuffer() else { fail("no command buffer") }
     encode(buffer, advectVelocity, reads: [velocityA], writes: [velocityB], uniforms: &uniforms, size: simulationSize)

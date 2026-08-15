@@ -108,6 +108,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var phaseOffset: Float
         var vorticity: Float
         var dyeSeedAmount: Float
+        var impulse: Float
     }
 
     var state = VisualState(
@@ -141,6 +142,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     private var lastFrame = CACurrentMediaTime()
     private var warmupFrames = 24
     private var activeSeed: OrbSeed?
+    /// The voice level the fluid is actually driven by, and the onset spike
+    /// taken from it. A fluid integrates its forcing over seconds, which is far
+    /// too slow to feel like listening, so speech is followed twice: an envelope
+    /// that rises almost instantly and falls smoothly, and an impulse that fires
+    /// when the level jumps above that envelope.
+    private var envelope: Float = 0
+    private var impulse: Float = 0
 
     init?(view: MTKView) {
         guard let device = view.device,
@@ -210,6 +218,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         let elapsed = Float(now - startTime)
         let realDT = Float(min(max(now - lastFrame, 1.0 / 120.0), 1.0 / 20.0))
         lastFrame = now
+        trackVoice(dt: realDT)
         let steps = warmupFrames > 0 ? 4 : 1
         warmupFrames = max(0, warmupFrames - steps)
 
@@ -233,11 +242,25 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
     }
 
+    /// Follows the voice at frame rate rather than at the audio callback's, so
+    /// the attack and decay stay the same however the level happens to arrive.
+    private func trackVoice(dt: Float) {
+        let level = max(state.energy, state.phase == 4 ? 0.78 : 0.015)
+        // How far the voice has jumped above where it has been sitting: the
+        // start of a syllable, not its loudness.
+        let onset: Float = max(0, level - envelope)
+        let rate: Float = level > envelope ? 26 : 5.5
+        let follow: Float = min(1, dt * rate)
+        envelope += (level - envelope) * follow
+        let decayed: Float = impulse * pow(0.02, dt)
+        impulse = max(decayed, min(1, onset * 3.4))
+    }
+
     private func makeUniforms(dt: Float, time: Float, outputSize: SIMD2<Float>) -> Uniforms {
         Uniforms(
             dt: dt,
             time: time,
-            energy: max(state.energy, state.phase == 4 ? 0.78 : 0.015),
+            energy: max(envelope, state.phase == 4 ? 0.78 : 0.015),
             phase: state.phase,
             simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
             outputSize: outputSize,
@@ -246,7 +269,8 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             salt: state.seed.salt,
             phaseOffset: state.seed.phaseOffset,
             vorticity: state.seed.vorticity,
-            dyeSeedAmount: state.seed.dyeAmount
+            dyeSeedAmount: state.seed.dyeAmount,
+            impulse: impulse
         )
     }
 
@@ -323,6 +347,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float phaseOffset;
         float vorticity;
         float dyeSeedAmount;
+        float impulse;
     };
 
     constexpr sampler fluidSampler(coord::normalized, address::clamp_to_edge, filter::linear);
@@ -461,6 +486,16 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 turbulentWake = transverse * wake * .7;
         advected += (inertialForce + turbulentWake) * u.motionEnergy * motionEnvelope * u.dt * 1.35;
 
+        // A syllable has to be felt before the fluid could carry it anywhere.
+        // The onset drives a shell of flow outward from the middle: the radial
+        // half compresses, which the projection turns into pressure the render
+        // reads as light, and the tangential half twists what the pressure lit.
+        float radius = length(p);
+        float2 outward = radius > 1e-4 ? p / radius : float2(0.0);
+        float2 around = float2(-outward.y, outward.x);
+        float shell = exp(-pow((radius - .38) * 2.4, 2.0));
+        advected += (outward * .62 + around * .78) * u.impulse * shell * u.dt * 5.5;
+
         float edge = length(p);
         if (edge > .72) advected -= p * smoothstep(.72, 1.0, edge) * .025;
         output.write(half4(half2(clamp(advected, -.8, .8)), 0, 1), gid);
@@ -549,7 +584,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             float thickness = salted(u.salt, slot + 6, .0007, .0042);
             injection[i] = exp(-(distance * distance) / thickness) * salted(u.salt, slot + 7, .45, 1.5);
         }
-        density += injection * (.22 + u.energy * .12) * u.dt;
+        // Volume pumps dye. Silence trickles, speech pours, and an onset dumps a
+        // burst in on the frame it arrives.
+        density += injection * (.14 + u.energy * .62 + u.impulse * .55) * u.dt;
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
@@ -624,10 +661,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float3 dyeUp = dye.sample(fluidSampler, refracted + float2(0, texel)).rgb;
         float3 interfaces = abs(dyeRight - dyeLeft) + abs(dyeUp - dyeDown);
         light += palette(interfaces, u.phase) * (.72 + pressureSignal * .62);
-        light = 1.0 - exp(-light * (2.0 + u.energy * .12));
+        // Exposure follows the voice directly. Everything else here has to wait
+        // for the fluid to move; this lands on the frame the sound does, and is
+        // what makes the orb read as listening rather than merely running.
+        light = 1.0 - exp(-light * (1.55 + u.energy * 1.85 + u.impulse * 1.15));
 
         float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.0015, .006, .024);
-        float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * .2);
+        float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * (.2 + u.impulse * .9));
         color *= .22 + .78 * pow(z, .62); // heavy glass absorption at the limb
         color *= .78 + .22 * exp(-density * .35); // dark density occlusion
 

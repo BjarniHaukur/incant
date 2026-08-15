@@ -8,6 +8,8 @@ final class AudioCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Audio")
     private var converter: AVAudioConverter?
+    private var levelPeak: Float = 0
+    private var levelLogged = Date.distantPast
     private let outputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
         sampleRate: 24_000,
@@ -39,7 +41,9 @@ final class AudioCapture: @unchecked Sendable {
 
         input.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) { [weak self] buffer, _ in
             guard let self, let converted = self.convert(buffer, using: converter) else { return }
-            onLevel(self.level(from: buffer))
+            let level = self.level(from: buffer)
+            self.reportLevel(level)
+            onLevel(level)
             if let pointer = converted.int16ChannelData?.pointee {
                 onAudio(Data(bytes: pointer, count: Int(converted.frameLength) * MemoryLayout<Int16>.size))
             }
@@ -189,6 +193,17 @@ final class AudioCapture: @unchecked Sendable {
         }
         guard status != .error, error == nil, output.frameLength > 0 else { return nil }
         return output
+    }
+
+    /// One line a second with the loudest level in it, so "the orb is not
+    /// reacting" can be told apart from "the microphone is not being heard"
+    /// without a debugger.
+    private func reportLevel(_ level: Float) {
+        levelPeak = max(levelPeak, level)
+        guard Date.now.timeIntervalSince(levelLogged) >= 1 else { return }
+        levelLogged = .now
+        logger.info("Microphone level peak \(self.levelPeak, format: .fixed(precision: 2), privacy: .public)")
+        levelPeak = 0
     }
 
     private func level(from buffer: AVAudioPCMBuffer) -> Float {
