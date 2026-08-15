@@ -39,6 +39,28 @@ The API key is stored in macOS Keychain. Incant needs Microphone permission
 and Accessibility permission for text insertion in apps that do not expose a
 writable accessibility text selection.
 
+## Handing it to someone else
+
+```sh
+./make-dmg.sh
+```
+
+`dist/Incant.dmg` holds the app, an Applications folder to drag it onto, and a
+note explaining the two permissions and the API key.
+
+It also explains Gatekeeper, because this build is **ad-hoc signed** and
+`spctl --assess` rejects it. On any Mac but the one that built it, macOS will
+refuse to open the app until the recipient right-clicks it and chooses Open, or
+approves it under System Settings → Privacy & Security. That is a one-time step,
+but it is exactly the kind of step that loses non-technical users, and it looks
+identical to what a genuinely malicious download would ask of them.
+
+Removing it takes a paid Apple Developer account: sign with a Developer ID
+Application certificate, enable the hardened runtime with the
+`com.apple.security.device.audio-input` entitlement for the microphone, submit
+the image to `notarytool`, and staple the ticket to it. Then the DMG opens with
+no warning at all. Nothing else about the app has to change.
+
 ## Rendering the orb animation
 
 `docs/orb.webp` is rendered headlessly, reading the Metal source straight out of
