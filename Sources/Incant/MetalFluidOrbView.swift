@@ -666,18 +666,18 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
-    // A palantír is black crystal with its heart afire, so the resting stone
-    // burns low and red under violet shadow rather than glowing helpfully blue.
-    // Error has to stay legible against that, so it flares white-hot instead of
-    // merely being red, and the working states keep their own hues.
+    // An uncorrupted palantír is blue. Deep and cold rather than the bright cyan
+    // of something helpful, because the unease is meant to come from the depth,
+    // not from the hue. Red belongs to exactly one state: the one where
+    // something else is looking back, which here is an error.
     float3 palette(float3 dye, uint phase) {
-        float3 a = float3(.26, .012, .03);
-        float3 b = float3(1.0, .16, .04);
-        float3 c = float3(.09, .01, .13);
-        if (phase == 1) { a = float3(.18, .12, .7); b = float3(.48, .3, 1.0); c = float3(.04, .32, .88); }
+        float3 a = float3(.015, .09, .34);
+        float3 b = float3(.05, .38, .78);
+        float3 c = float3(.14, .04, .46);
+        if (phase == 1) { a = float3(.1, .1, .52); b = float3(.3, .26, .86); c = float3(.03, .24, .7); }
         if (phase == 2) { a *= .72; b *= .68; c *= .78; }
-        if (phase == 3) { a = float3(.02, .42, .62); b = float3(.06, 1.0, .72); c = float3(.08, .48, .9); }
-        if (phase == 4) { a = float3(.95, .16, .03); b = float3(1.0, .6, .32); c = float3(.7, .04, .02); }
+        if (phase == 3) { a = float3(.02, .34, .54); b = float3(.05, .82, .66); c = float3(.06, .38, .8); }
+        if (phase == 4) { a = float3(.72, .015, .005); b = float3(1.0, .14, .015); c = float3(.48, .0, .08); }
         return dye.r * a + dye.g * b + dye.b * c;
     }
 
@@ -713,21 +713,30 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             - pressure.sample(fluidSampler, sphereUV - float2(0, pressureTexel)).x;
         float pressureSignal = clamp(abs(pressureCenter) * 16.0 + length(float2(pressureX, pressureY)) * 42.0, 0.0, 1.0);
 
-        // Front-to-back integration through seven moving depth planes. Each
-        // layer has parallax, absorption and a slightly different fluid
-        // coordinate, creating a real volume inside the spherical shell.
+        // Front-to-back through seven planes of a well rather than a shell. Each
+        // plane is one step further down: it contracts toward the middle, turns
+        // as it descends, and fades into the dark. The stack also drifts inward
+        // with time, so structure slides away forever and never lands on a
+        // floor — which is what makes this read as an opening rather than an
+        // object. Depth is what should feel wrong here, not the colour.
         float3 light = float3(0.0);
         float transmittance = 1.0;
         float density = 0.0;
+        float mouthAngle = atan2(q.y, q.x);
+        float mouthRadius = sqrt(r2);
         for (uint i = 0; i < 7; i++) {
-            float depth = (float(i) / 6.0) * 2.0 - 1.0;
-            float2 parallax = flow * depth * .075;
-            float2 layerUV = refracted + parallax;
+            float plane = float(i) / 6.0;
+            float depth = plane * 2.0 - 1.0;
+            float descent = plane * .62 + u.time * .035;
+            float turned = mouthAngle + descent * .85;
+            float2 spiral = float2(cos(turned), sin(turned)) * mouthRadius * exp(-descent * .55);
+            float2 layerUV = mix(refracted, .5 + spiral * (.37 + .09 * z), .55) + flow * depth * .075;
             layerUV += float2(sin(u.time * .037 + depth * 2.7), cos(u.time * .029 - depth * 1.9)) * .022 * depth;
             float3 layerDye = dye.sample(fluidSampler, layerUV).rgb;
             float layerDensity = dot(layerDye, float3(.22, .31, .25));
             float absorption = 1.0 - exp(-layerDensity * .38);
-            light += transmittance * palette(layerDye, u.phase) * (.13 + absorption * .34);
+            float fog = exp(-plane * 1.15);
+            light += transmittance * palette(layerDye, u.phase) * (.13 + absorption * .34) * fog;
             transmittance *= 1.0 - absorption * .48;
             density += layerDensity;
         }
@@ -744,23 +753,21 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         // Exposure follows the voice directly. Everything else here has to wait
         // for the fluid to move; this lands on the frame the sound does, and is
         // what makes the orb read as listening rather than merely running.
-        light = 1.0 - exp(-light * (2.4 + u.energy * 1.9 + u.impulse * 1.3));
+        light = 1.0 - exp(-light * (2.1 + u.energy * 1.5 + u.impulse * 1.1));
 
-        float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.006, .001, .004);
+        float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.001, .004, .012);
         float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * (.2 + u.impulse * .9));
         color *= .22 + .78 * pow(z, .62); // heavy glass absorption at the limb
         color *= .78 + .22 * exp(-density * .35); // dark density occlusion
 
-        float3 normal = normalize(float3(q, z));
-        float3 halfVector = normalize(float3(-.45, -.55, 1.5));
-        float specular = pow(max(dot(normal, halfVector), 0.0), 85.0) * .12;
-        float fresnel = pow(1.0 - z, 4.0) * .16;
-        // The rim stays cold: obsidian catching the room, against the fire it is
-        // holding in. Without that contrast the whole stone reads as a lamp.
-        color += specular + fresnel * (u.phase == 4 ? float3(.22, .01, .005) : float3(.05, .07, .17));
-        // Light lives in the heart of the stone and the shell stays dark glass,
-        // so the eye looks *into* it rather than at a glowing ball.
-        color *= .26 + 0.74 * exp(-r2 * 1.05);
+        // No specular. A highlight is a lit surface, and a surface is an object
+        // sitting on the desktop — the opposite of an opening in it. The limb
+        // only swallows light rather than catching any.
+        color *= 1.0 - pow(1.0 - z, 3.0) * .55;
+        // A well is darkest where it is deepest. Light belongs on the walls of
+        // the throat, never at the bottom, or the opening reads as a ball the
+        // moment anything brightens it.
+        color *= .18 + .82 * smoothstep(0.0, .78, mouthRadius);
         color = pow(max(color, 0.0), float3(.88));
         output.write(half4(half3(color), half(alpha)), g);
     }
