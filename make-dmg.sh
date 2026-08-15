@@ -54,4 +54,33 @@ hdiutil create -quiet -srcfolder "$staging" -volname "Incant" \
   -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$dmg"
 rm -rf "$staging"
 
-print "$dmg ($version, $(du -h "$dmg" | cut -f1))"
+# Sign and notarize the image when there is a certificate to do it with. Apple
+# has to see the app, so build-app.sh must have signed it with the same identity
+# — an ad-hoc app inside a signed image is rejected at notarization, not at the
+# door. Stapling writes the ticket into the image so it opens even offline.
+identity=${INCANT_SIGN_IDENTITY:-$(
+  security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+)}
+profile=${INCANT_NOTARY_PROFILE:-incant-notary}
+
+if [[ -z "$identity" ]]; then
+  print "$dmg ($version, $(du -h "$dmg" | cut -f1)) — unsigned, Gatekeeper will warn"
+  print "see README: this needs an Apple Developer Program membership"
+  exit 0
+fi
+
+codesign --force --sign "$identity" --timestamp "$dmg"
+
+if ! xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1; then
+  print "$dmg ($version) — signed but not notarized: no notarytool profile '$profile'"
+  print "store one with: xcrun notarytool store-credentials $profile \\"
+  print "  --apple-id <your-apple-id> --team-id <your-team-id> --password <app-specific-password>"
+  exit 0
+fi
+
+xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait
+xcrun stapler staple "$dmg"
+spctl --assess --type open --context context:primary-signature -vv "$dmg"
+
+print "$dmg ($version, $(du -h "$dmg" | cut -f1)) — signed, notarized, stapled"
