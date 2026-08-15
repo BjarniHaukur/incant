@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct RecorderOrbView: View {
+    /// The stone's own light, used wherever the chrome around it needs a colour.
+    static let ember = Color(red: 0.86, green: 0.14, blue: 0.06)
+
     @ObservedObject var model: AppModel
     var orbDiameter: CGFloat = 150
     var canvasSize: CGFloat = 220
@@ -81,9 +84,9 @@ struct RecorderOrbView: View {
             .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.blue.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
+                    .stroke(Self.ember.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
             }
-            .shadow(color: Color.blue.opacity(composerHovered ? 0.09 : 0.03), radius: 16)
+            .shadow(color: Self.ember.opacity(composerHovered ? 0.09 : 0.03), radius: 16)
     }
 
     private func hoverButton(
@@ -97,8 +100,8 @@ struct RecorderOrbView: View {
                 Circle()
                     .fill(RadialGradient(
                         colors: active
-                            ? [Color.cyan.opacity(0.5), Color.blue.opacity(0.32), Color.black.opacity(0.9)]
-                            : [Color.white.opacity(0.18), Color.blue.opacity(0.1), Color.black.opacity(0.92)],
+                            ? [Color.orange.opacity(0.5), Self.ember.opacity(0.32), Color.black.opacity(0.9)]
+                            : [Color.white.opacity(0.18), Self.ember.opacity(0.1), Color.black.opacity(0.92)],
                         center: UnitPoint(x: 0.36, y: 0.28),
                         startRadius: 0,
                         endRadius: 13
@@ -109,7 +112,7 @@ struct RecorderOrbView: View {
             }
             .frame(width: 20, height: 20)
             .overlay { Circle().stroke(.white.opacity(active ? 0.24 : 0.09), lineWidth: 0.7) }
-            .shadow(color: active ? Color.cyan.opacity(0.28) : .black.opacity(0.5), radius: 5)
+            .shadow(color: active ? Color.orange.opacity(0.28) : .black.opacity(0.5), radius: 5)
         }
         .buttonStyle(.plain)
         .opacity(composerHovered ? 1 : 0)
@@ -148,11 +151,12 @@ struct RecorderOrbView: View {
 
     private var glowColor: Color {
         switch model.phase {
-        case .error: return Color(red: 1, green: 0.08, blue: 0.03)
+        case .error: return Color(red: 1, green: 0.34, blue: 0.12)
         case .connecting: return Color(red: 0.33, green: 0.24, blue: 1)
-        case .finishing: return Color(red: 0.15, green: 0.28, blue: 0.8)
+        case .finishing: return Color(red: 0.5, green: 0.1, blue: 0.28)
         case .success: return Color(red: 0.05, green: 0.9, blue: 0.65)
-        case .idle, .listening: return Color(red: 0.02, green: 0.38, blue: 1)
+        // What a stone with a fire in it would actually throw on the desk.
+        case .idle, .listening: return Color(red: 0.85, green: 0.1, blue: 0.06)
         }
     }
 }

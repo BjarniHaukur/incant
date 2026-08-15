@@ -666,14 +666,18 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
+    // A palantír is black crystal with its heart afire, so the resting stone
+    // burns low and red under violet shadow rather than glowing helpfully blue.
+    // Error has to stay legible against that, so it flares white-hot instead of
+    // merely being red, and the working states keep their own hues.
     float3 palette(float3 dye, uint phase) {
-        float3 a = float3(.02, .22, .72);
-        float3 b = float3(.02, .72, 1.0);
-        float3 c = float3(.26, .08, .58);
+        float3 a = float3(.26, .012, .03);
+        float3 b = float3(1.0, .16, .04);
+        float3 c = float3(.09, .01, .13);
         if (phase == 1) { a = float3(.18, .12, .7); b = float3(.48, .3, 1.0); c = float3(.04, .32, .88); }
         if (phase == 2) { a *= .72; b *= .68; c *= .78; }
         if (phase == 3) { a = float3(.02, .42, .62); b = float3(.06, 1.0, .72); c = float3(.08, .48, .9); }
-        if (phase == 4) { a = float3(.72, .015, .005); b = float3(1.0, .14, .015); c = float3(.48, .0, .08); }
+        if (phase == 4) { a = float3(.95, .16, .03); b = float3(1.0, .6, .32); c = float3(.7, .04, .02); }
         return dye.r * a + dye.g * b + dye.b * c;
     }
 
@@ -740,9 +744,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         // Exposure follows the voice directly. Everything else here has to wait
         // for the fluid to move; this lands on the frame the sound does, and is
         // what makes the orb read as listening rather than merely running.
-        light = 1.0 - exp(-light * (1.4 + u.energy * 1.15 + u.impulse * .85));
+        light = 1.0 - exp(-light * (2.4 + u.energy * 1.9 + u.impulse * 1.3));
 
-        float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.0015, .006, .024);
+        float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.006, .001, .004);
         float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * (.2 + u.impulse * .9));
         color *= .22 + .78 * pow(z, .62); // heavy glass absorption at the limb
         color *= .78 + .22 * exp(-density * .35); // dark density occlusion
@@ -751,8 +755,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float3 halfVector = normalize(float3(-.45, -.55, 1.5));
         float specular = pow(max(dot(normal, halfVector), 0.0), 85.0) * .12;
         float fresnel = pow(1.0 - z, 4.0) * .16;
-        color += specular + fresnel * (u.phase == 4 ? float3(.22, .01, .005) : float3(.025, .09, .18));
-        color = pow(max(color, 0.0), float3(.82));
+        // The rim stays cold: obsidian catching the room, against the fire it is
+        // holding in. Without that contrast the whole stone reads as a lamp.
+        color += specular + fresnel * (u.phase == 4 ? float3(.22, .01, .005) : float3(.05, .07, .17));
+        // Light lives in the heart of the stone and the shell stays dark glass,
+        // so the eye looks *into* it rather than at a glowing ball.
+        color *= .26 + 0.74 * exp(-r2 * 1.05);
+        color = pow(max(color, 0.0), float3(.88));
         output.write(half4(half3(color), half(alpha)), g);
     }
     """#
