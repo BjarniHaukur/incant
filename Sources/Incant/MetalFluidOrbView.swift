@@ -109,6 +109,10 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var vorticity: Float
         var dyeSeedAmount: Float
         var impulse: Float
+        var impulseWidth: Float
+        var impulseCenter: SIMD2<Float>
+        var impulseSpin: Float
+        var impulsePush: Float
     }
 
     var state = VisualState(
@@ -149,6 +153,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
     /// when the level jumps above that envelope.
     private var envelope: Float = 0
     private var impulse: Float = 0
+    /// Where the current syllable landed and what it did there. Rolled fresh on
+    /// every onset: a fixed shove in a fixed place made every word feel like the
+    /// same button being pressed.
+    private var impulseCenter = SIMD2<Float>.zero
+    private var impulseWidth: Float = 0.3
+    private var impulseSpin: Float = 0
+    private var impulsePush: Float = 0
 
     init?(view: MTKView) {
         guard let device = view.device,
@@ -253,7 +264,20 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         let follow: Float = min(1, dt * rate)
         envelope += (level - envelope) * follow
         let decayed: Float = impulse * pow(0.02, dt)
-        impulse = max(decayed, min(1, onset * 3.4))
+        let fired: Float = min(1, onset * 3.4)
+        if fired > decayed { rollImpulse() }
+        impulse = max(decayed, fired)
+    }
+
+    /// Somewhere new, at a new size, pushing or pulling, wound either way.
+    private func rollImpulse() {
+        let angle = Float.random(in: 0..<(2 * .pi))
+        let radius = Float.random(in: 0...1).squareRoot() * 0.66
+        impulseCenter = SIMD2(cos(angle), sin(angle)) * radius
+        impulseWidth = .random(in: 0.15...0.46)
+        impulseSpin = .random(in: -1...1)
+        let strength = Float.random(in: 0.4...1)
+        impulsePush = Bool.random() ? strength : -strength
     }
 
     private func makeUniforms(dt: Float, time: Float, outputSize: SIMD2<Float>) -> Uniforms {
@@ -270,7 +294,11 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             phaseOffset: state.seed.phaseOffset,
             vorticity: state.seed.vorticity,
             dyeSeedAmount: state.seed.dyeAmount,
-            impulse: impulse
+            impulse: impulse,
+            impulseWidth: impulseWidth,
+            impulseCenter: impulseCenter,
+            impulseSpin: impulseSpin,
+            impulsePush: impulsePush
         )
     }
 
@@ -348,6 +376,10 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float vorticity;
         float dyeSeedAmount;
         float impulse;
+        float impulseWidth;
+        float2 impulseCenter;
+        float impulseSpin;
+        float impulsePush;
     };
 
     constexpr sampler fluidSampler(coord::normalized, address::clamp_to_edge, filter::linear);
@@ -407,10 +439,39 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
                 + sin(t * (.11 + fi * .023) * churn + fi * 1.3 + offset) * (0.7 + energy);
             float phaseY = kx * p.x - direction * t * (.29 + fi * .063) * churn
                 + cos(t * (.14 + fi * .019) * churn - fi * .9 - offset) * (0.65 + energy);
-            float amplitude = .032 / (1.0 + fi * .42);
+            // The lowest octave is a single cell the width of the sphere, so at
+            // full weight it organises everything around the middle no matter
+            // what the rest of the field does. Held back, the finer octaves
+            // decide the composition instead.
+            float amplitude = .032 / (1.0 + fi * .42) * (i == 0 ? .5 : 1.0);
             float gain = amplitude * (.28 + energy * (1.6 + fi * .72));
             v.x += gain * sin(phaseX);
             v.y += direction * gain * sin(phaseY);
+        }
+        return v;
+    }
+
+    // The basin the session settles into. Three vortex cores at seeded places,
+    // each with its own handedness, strength and slow wander, so the fluid has a
+    // different large-scale attractor every time — the shear field alone always
+    // organised itself around the centre of the sphere. A swirl whose speed
+    // depends only on the distance from its own core adds no divergence, so this
+    // costs the projection nothing.
+    float2 seededBasin(float2 p, uint salt, float t) {
+        float2 v = float2(0.0);
+        for (uint i = 0; i < 3; i++) {
+            uint slot = 80 + i * 6;
+            float angle = salted(salt, slot, 0.0, 6.2831853);
+            float2 core = float2(cos(angle), sin(angle)) * salted(salt, slot + 1, .1, .72);
+            core += float2(
+                sin(t * salted(salt, slot + 2, .03, .12) + float(i) * 2.1),
+                cos(t * salted(salt, slot + 3, .02, .1) - float(i) * 1.7)
+            ) * .14;
+            float spin = salted(salt, slot + 4, .3, 1.0)
+                * (saltedUnit(salt, slot + 5) < .5 ? -1.0 : 1.0);
+            float2 d = p - core;
+            float extent = .5;
+            v += float2(-d.y, d.x) * spin * exp(-dot(d, d) / (extent * extent)) * .06;
         }
         return v;
     }
@@ -455,7 +516,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             density[i] = pow(max(noise - threshold, 0.0) / (1.0 - threshold), 1.5) * u.dyeSeedAmount;
         }
         float envelope = 1.0 - smoothstep(.5, 1.0, length((uv - .5) * 2.0));
-        output.write(half4(half3(clamp(density * envelope * 1.6, 0.0, 3.0)), 1), gid);
+        output.write(half4(half3(clamp(density * envelope * 1.1, 0.0, 3.0)), 1), gid);
     }
 
     kernel void advectVelocity(
@@ -471,7 +532,8 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             * pow(salted(u.salt, 30, .982, .993), u.dt * 60.0);
         float2 p = (uv - .5) * 2.0;
         float stateGain = u.phase == 1 ? .6 + .4 * sin(u.time * 2.4) : 1.0;
-        advected += curlField(p, t, u.energy, u.salt) * u.dt * stateGain;
+        advected += (curlField(p, t, u.energy, u.salt)
+            + seededBasin(p, u.salt, t) * (.5 + u.energy * 1.0)) * u.dt * stateGain;
 
         // Moving the window accelerates its glass shell while the fluid lags
         // behind. A soft spatial envelope turns that inertia into pressure;
@@ -486,18 +548,32 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 turbulentWake = transverse * wake * .7;
         advected += (inertialForce + turbulentWake) * u.motionEnergy * motionEnvelope * u.dt * 1.35;
 
-        // A syllable has to be felt before the fluid could carry it anywhere.
-        // The onset drives a shell of flow outward from the middle: the radial
-        // half compresses, which the projection turns into pressure the render
-        // reads as light, and the tangential half twists what the pressure lit.
-        float radius = length(p);
-        float2 outward = radius > 1e-4 ? p / radius : float2(0.0);
+        // A syllable has to be felt before the fluid could carry it anywhere, so
+        // the onset shoves the fluid directly — but at a place, a size, a
+        // handedness and a sign rolled for that syllable alone. Pushing spreads
+        // dye and compresses the surrounding fluid, which the projection turns
+        // into the pressure the render reads as light; pulling drags it back and
+        // hollows the same spot out. A fixed ring in the middle did neither, it
+        // just repeated.
+        float2 fromImpulse = p - u.impulseCenter;
+        float impulseDistance2 = dot(fromImpulse, fromImpulse);
+        float impulseFalloff = exp(-impulseDistance2 / (u.impulseWidth * u.impulseWidth));
+        float2 outward = impulseDistance2 > 1e-6
+            ? fromImpulse * rsqrt(impulseDistance2)
+            : float2(0.0);
         float2 around = float2(-outward.y, outward.x);
-        float shell = exp(-pow((radius - .38) * 2.4, 2.0));
-        advected += (outward * .62 + around * .78) * u.impulse * shell * u.dt * 5.5;
+        advected += (outward * u.impulsePush * .85 + around * u.impulseSpin * 1.15)
+            * u.impulse * impulseFalloff * u.dt * 6.5;
 
+        // Containment used to be purely inward, which is a permanent pull toward
+        // the middle. Most of it is now shear along the limb, wound per session.
         float edge = length(p);
-        if (edge > .72) advected -= p * smoothstep(.72, 1.0, edge) * .025;
+        if (edge > .72) {
+            float containment = smoothstep(.72, 1.0, edge);
+            float rimSpin = saltedUnit(u.salt, 100) < .5 ? -1.0 : 1.0;
+            advected -= p * containment * .009;
+            advected += float2(-p.y, p.x) * rimSpin * containment * salted(u.salt, 101, .012, .04);
+        }
         output.write(half4(half2(clamp(advected, -.8, .8)), 0, 1), gid);
     }
 
@@ -564,7 +640,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         ) * .25;
         float diffusion = salted(u.salt, 32, .03, .085) + u.energy * .035;
         float3 density = mix(centerDye, neighboringDye, diffusion)
-            * pow(salted(u.salt, 33, .981, .993), u.dt * 60.0);
+            * pow(salted(u.salt, 33, .975, .989), u.dt * 60.0);
 
         // One continuous dye sheet per channel, folded by the projected velocity
         // field. Orientation, offset, thickness, waviness and drift are all
@@ -586,7 +662,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         }
         // Volume pumps dye. Silence trickles, speech pours, and an onset dumps a
         // burst in on the frame it arrives.
-        density += injection * (.14 + u.energy * .62 + u.impulse * .55) * u.dt;
+        density += injection * (.12 + u.energy * .3 + u.impulse * .34) * u.dt;
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
@@ -664,7 +740,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         // Exposure follows the voice directly. Everything else here has to wait
         // for the fluid to move; this lands on the frame the sound does, and is
         // what makes the orb read as listening rather than merely running.
-        light = 1.0 - exp(-light * (1.55 + u.energy * 1.85 + u.impulse * 1.15));
+        light = 1.0 - exp(-light * (1.4 + u.energy * 1.55 + u.impulse * 1.0));
 
         float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.0015, .006, .024);
         float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * (.2 + u.impulse * .9));

@@ -63,6 +63,20 @@ struct Uniforms {
     var vorticity: Float
     var dyeSeedAmount: Float
     var impulse: Float
+    var impulseWidth: Float
+    var impulseCenter: SIMD2<Float>
+    var impulseSpin: Float
+    var impulsePush: Float
+}
+
+/// The app rolls each syllable's impulse with the system generator. Here the
+/// rolls hang off the salt instead, so a salt renders the same animation twice.
+struct SaltedGenerator: RandomNumberGenerator {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return state
+    }
 }
 
 // The app rolls a fresh seed for every session. The README keeps one fixed roll
@@ -162,12 +176,29 @@ let totalFrames = loopFrames + crossfadeFrames
 /// animation reacts to the synthetic voice exactly as the app does to a real one.
 var envelope: Float = 0
 var impulse: Float = 0
+var impulseCenter = SIMD2<Float>.zero
+var impulseWidth: Float = 0.3
+var impulseSpin: Float = 0
+var impulsePush: Float = 0
+var generator = SaltedGenerator(state: UInt64(salt) &+ 0x9E37_79B9_7F4A_7C15)
+
 func trackVoice(at time: Float, dt: Float) {
     let level = max(voiceLevel(at: time), 0.015)
-    let onset = max(0, level - envelope)
+    let onset: Float = max(0, level - envelope)
     let rate: Float = level > envelope ? 26 : 5.5
     envelope += (level - envelope) * min(1, dt * rate)
-    impulse = max(impulse * pow(0.02, dt), min(1, onset * 3.4))
+    let decayed: Float = impulse * pow(0.02, dt)
+    let fired: Float = min(1, onset * 3.4)
+    if fired > decayed {
+        let angle = Float.random(in: 0..<(2 * .pi), using: &generator)
+        let radius = Float.random(in: 0...1, using: &generator).squareRoot() * 0.66
+        impulseCenter = SIMD2(cos(angle), sin(angle)) * radius
+        impulseWidth = .random(in: 0.15...0.46, using: &generator)
+        impulseSpin = .random(in: -1...1, using: &generator)
+        let strength = Float.random(in: 0.4...1, using: &generator)
+        impulsePush = Bool.random(using: &generator) ? strength : -strength
+    }
+    impulse = max(decayed, fired)
 }
 
 func makeUniforms(dt: Float, time: Float) -> Uniforms {
@@ -184,7 +215,11 @@ func makeUniforms(dt: Float, time: Float) -> Uniforms {
         phaseOffset: 0,
         vorticity: vorticity,
         dyeSeedAmount: dyeSeedAmount,
-        impulse: impulse
+        impulse: impulse,
+        impulseWidth: impulseWidth,
+        impulseCenter: impulseCenter,
+        impulseSpin: impulseSpin,
+        impulsePush: impulsePush
     )
 }
 
