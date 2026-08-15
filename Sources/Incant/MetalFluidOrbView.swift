@@ -444,7 +444,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             // what the rest of the field does. Held back, the finer octaves
             // decide the composition instead.
             float amplitude = .032 / (1.0 + fi * .42) * (i == 0 ? .5 : 1.0);
-            float gain = amplitude * (.28 + energy * (1.6 + fi * .72));
+            float gain = amplitude * (1.25 + energy * (2.6 + fi * .9));
             v.x += gain * sin(phaseX);
             v.y += direction * gain * sin(phaseY);
         }
@@ -464,8 +464,8 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             float angle = salted(salt, slot, 0.0, 6.2831853);
             float2 core = float2(cos(angle), sin(angle)) * salted(salt, slot + 1, .1, .72);
             core += float2(
-                sin(t * salted(salt, slot + 2, .03, .12) + float(i) * 2.1),
-                cos(t * salted(salt, slot + 3, .02, .1) - float(i) * 1.7)
+                sin(t * salted(salt, slot + 2, .3, .72) + float(i) * 2.1),
+                cos(t * salted(salt, slot + 3, .3, .72) - float(i) * 1.7)
             ) * .14;
             float spin = salted(salt, slot + 4, .3, 1.0)
                 * (saltedUnit(salt, slot + 5) < .5 ? -1.0 : 1.0);
@@ -533,7 +533,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float2 p = (uv - .5) * 2.0;
         float stateGain = u.phase == 1 ? .6 + .4 * sin(u.time * 2.4) : 1.0;
         advected += (curlField(p, t, u.energy, u.salt)
-            + seededBasin(p, u.salt, t) * (.5 + u.energy * 1.0)) * u.dt * stateGain;
+            + seededBasin(p, u.salt, t) * (1.0 + u.energy * 1.0)) * u.dt * stateGain;
 
         // Moving the window accelerates its glass shell while the fluid lags
         // behind. A soft spatial envelope turns that inertia into pressure;
@@ -640,7 +640,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         ) * .25;
         float diffusion = salted(u.salt, 32, .03, .085) + u.energy * .035;
         float3 density = mix(centerDye, neighboringDye, diffusion)
-            * pow(salted(u.salt, 33, .975, .989), u.dt * 60.0);
+            * pow(salted(u.salt, 33, .980, .992), u.dt * 60.0);
 
         // One continuous dye sheet per channel, folded by the projected velocity
         // field. Orientation, offset, thickness, waviness and drift are all
@@ -662,7 +662,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         }
         // Volume pumps dye. Silence trickles, speech pours, and an onset dumps a
         // burst in on the frame it arrives.
-        density += injection * (.12 + u.energy * .3 + u.impulse * .34) * u.dt;
+        density += injection * (.16 + u.energy * .22 + u.impulse * .28) * u.dt;
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
@@ -740,7 +740,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         // Exposure follows the voice directly. Everything else here has to wait
         // for the fluid to move; this lands on the frame the sound does, and is
         // what makes the orb read as listening rather than merely running.
-        light = 1.0 - exp(-light * (1.4 + u.energy * 1.55 + u.impulse * 1.0));
+        light = 1.0 - exp(-light * (1.4 + u.energy * 1.15 + u.impulse * .85));
 
         float3 base = u.phase == 4 ? float3(.028, .001, .002) : float3(.0015, .006, .024);
         float3 color = base + light * (.62 + .82 * z) * (1.0 + pressureSignal * (.2 + u.impulse * .9));
