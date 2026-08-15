@@ -48,34 +48,18 @@ writable accessibility text selection.
 `dist/Incant.dmg` holds the app, an Applications folder to drag it onto, and a
 note explaining the two permissions and the API key.
 
-Both scripts sign and notarize properly as soon as a Developer ID certificate
-exists in the keychain, and fall back to ad-hoc signing when it does not — so
-they work either way and say which one happened. Ad-hoc means `spctl --assess`
-rejects the app, and every recipient has to right-click it and choose Open, or
-approve it under System Settings → Privacy & Security. One time only, but it is
-the step that loses non-technical users, and it looks identical to what a
-genuinely malicious download asks of them.
+It also explains Gatekeeper, because this build is **ad-hoc signed** and
+`spctl --assess` rejects it. On any Mac but the one that built it, macOS will
+refuse to open the app until the recipient right-clicks it and chooses Open, or
+approves it under System Settings → Privacy & Security. That is a one-time step,
+but it is exactly the kind of step that loses non-technical users, and it looks
+identical to what a genuinely malicious download would ask of them.
 
-Three things have to be done by hand, once, to make it open silently:
-
-1. **Join the Apple Developer Program** — $99/year. There is no free path;
-   notarization is not available to free Apple IDs.
-2. **Create a Developer ID Application certificate** at
-   [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates),
-   using a certificate request from Keychain Access → Certificate Assistant, and
-   install it. `security find-identity -v -p codesigning` should then list it.
-3. **Store notarization credentials** under the profile name the scripts expect,
-   using an [app-specific password](https://support.apple.com/102654):
-
-   ```sh
-   xcrun notarytool store-credentials incant-notary \
-     --apple-id <your-apple-id> --team-id <your-team-id> --password <app-specific-password>
-   ```
-
-After that `./build-app.sh && ./make-dmg.sh` signs the app with the hardened
-runtime and the microphone entitlement, signs the image, submits it, waits, and
-staples the ticket so it opens even offline. `notarytool` and `stapler` ship with
-the Command Line Tools; Xcode is not needed.
+Removing it takes a paid Apple Developer account: sign with a Developer ID
+Application certificate, enable the hardened runtime with the
+`com.apple.security.device.audio-input` entitlement for the microphone, submit
+the image to `notarytool`, and staple the ticket to it. Then the DMG opens with
+no warning at all. Nothing else about the app has to change.
 
 ## Rendering the orb animation
 
