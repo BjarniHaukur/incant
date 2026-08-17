@@ -5,7 +5,6 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var accessibilityGranted = false
     @State private var showingRecognitionContext = false
-    @State private var showingHistory = false
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -34,8 +33,6 @@ struct SettingsView: View {
                     shortcutRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     recognitionContextRow
-                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
-                    historyRow
                 }
                 .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {
@@ -60,9 +57,6 @@ struct SettingsView: View {
         .onReceive(permissionTimer) { _ in accessibilityGranted = TextInserter.isAccessibilityGranted }
         .sheet(isPresented: $showingRecognitionContext) {
             RecognitionContextEditor(model: model)
-        }
-        .sheet(isPresented: $showingHistory) {
-            TranscriptHistoryView(history: model.history)
         }
     }
 
@@ -159,35 +153,6 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16).frame(minHeight: 64)
-    }
-
-    private var historyRow: some View {
-        Button { showingHistory = true } label: {
-            HStack(spacing: 14) {
-                statusOrb(ready: model.history.isWorthShowing, color: .teal)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("History").font(.system(size: 14, weight: .medium))
-                    Text(historySummary)
-                        .font(.caption).foregroundStyle(.white.opacity(0.42))
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 16).frame(minHeight: 64)
-    }
-
-    private var historySummary: String {
-        let count = model.history.records.count
-        switch count {
-        case 0: return "Dictations you can go back and find"
-        case 1: return "1 dictation kept"
-        default: return "\(count) dictations kept"
-        }
     }
 
     private func statusOrb(ready: Bool, color: Color) -> some View {

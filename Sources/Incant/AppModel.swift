@@ -135,6 +135,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The most recent dictation worth going back for, if there is one.
+    var lastTranscript: TranscriptRecord? { history.records.first }
+
+    /// Puts a past dictation back into the staging box under the orb.
+    ///
+    /// Anything that streamed cleanly into another app belongs to that app — it
+    /// is the editing surface and the place it persists. This exists only for the
+    /// times the words went somewhere unintended, so the way back is into
+    /// Incant's own box rather than into a list Incant keeps about you.
+    func stage(_ record: TranscriptRecord) {
+        bufferedText = bufferedText.isEmpty ? record.text : bufferedText + " " + record.text
+    }
+
+    func stageLastTranscript() {
+        guard let record = lastTranscript else { return }
+        stage(record)
+    }
+
     func copyBufferedText() {
         guard !bufferedText.isEmpty else { return }
         NSPasteboard.general.clearContents()

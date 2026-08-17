@@ -11,6 +11,7 @@ struct RecorderOrbView: View {
     @State private var composerHovered = false
     @State private var copied = false
     @State private var composerHeight: CGFloat = 36
+    @State private var showingRecoveryList = false
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -41,41 +42,98 @@ struct RecorderOrbView: View {
 
     private var transcriptComposer: some View {
         let hasText = !model.bufferedText.isEmpty
-        return HStack(spacing: 7) {
-            hoverButton(
-                systemName: "gearshape.fill",
-                active: false,
-                help: "Open Incant settings"
-            ) {
-                model.openSettings()
-            }
-
-            transcriptField
-                .frame(width: hasText ? 232 : 0)
-                .opacity(hasText ? 1 : 0)
-                .clipped()
-                .allowsHitTesting(hasText)
-
-            hoverButton(
-                systemName: copied ? "checkmark" : "doc.on.doc",
-                active: copied,
-                help: "Copy transcript"
-            ) {
-                model.copyBufferedText()
-                copied = true
-                Task {
-                    try? await Task.sleep(for: .milliseconds(900))
-                    copied = false
+        let canRecover = !model.history.records.isEmpty
+        return VStack(spacing: 6) {
+            HStack(spacing: 7) {
+                hoverButton(
+                    systemName: "gearshape.fill",
+                    active: false,
+                    help: "Open Incant settings"
+                ) {
+                    model.openSettings()
                 }
+
+                transcriptField
+                    .frame(width: hasText ? 232 : 0)
+                    .opacity(hasText ? 1 : 0)
+                    .clipped()
+                    .allowsHitTesting(hasText)
+
+                hoverButton(
+                    systemName: copied ? "checkmark" : "doc.on.doc",
+                    active: copied,
+                    help: "Copy transcript"
+                ) {
+                    model.copyBufferedText()
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(900))
+                        copied = false
+                    }
+                }
+                .disabled(model.bufferedText.isEmpty)
             }
-            .disabled(model.bufferedText.isEmpty)
+
+            if canRecover {
+                recoveryButtons
+            }
         }
-        .frame(width: 290, height: composerHeight + 10)
+        .frame(width: 290, height: composerHeight + 10 + (canRecover ? 28 : 0))
         .opacity(composerHovered ? 1 : 0.88)
         .animation(.easeOut(duration: 0.15), value: composerHovered)
         .animation(.spring(response: 0.25, dampingFraction: 0.86), value: composerHeight)
         .animation(.spring(response: 0.36, dampingFraction: 0.78), value: hasText)
         .onHover { composerHovered = $0 }
+    }
+
+    /// Getting words back into the box, for when they went somewhere unintended.
+    /// Both are only worth showing once there is something to recover.
+    private var recoveryButtons: some View {
+        HStack(spacing: 6) {
+            capsuleButton(
+                systemName: "arrow.uturn.backward",
+                label: "Last",
+                help: model.lastTranscript.map { "Put back: \($0.text.prefix(60))…" } ?? ""
+            ) {
+                model.stageLastTranscript()
+            }
+
+            capsuleButton(
+                systemName: "list.bullet",
+                label: "All",
+                help: "Earlier dictations"
+            ) {
+                showingRecoveryList.toggle()
+            }
+            .popover(isPresented: $showingRecoveryList, arrowEdge: .bottom) {
+                TranscriptRecoveryList(history: model.history) { record in
+                    model.stage(record)
+                    showingRecoveryList = false
+                }
+            }
+        }
+        .opacity(composerHovered ? 1 : 0)
+    }
+
+    private func capsuleButton(
+        systemName: String,
+        label: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: systemName).font(.system(size: 8, weight: .semibold))
+                Text(label).font(.system(size: 10, weight: .medium, design: .rounded))
+            }
+            .foregroundStyle(.white.opacity(0.62))
+            .padding(.horizontal, 9)
+            .frame(height: 20)
+            .background(.black.opacity(0.62), in: Capsule())
+            .overlay { Capsule().stroke(Self.stoneLight.opacity(0.18), lineWidth: 0.7) }
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var transcriptField: some View {
