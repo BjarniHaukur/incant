@@ -41,6 +41,13 @@ final class AppModel: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
     private var motionDecayTask: Task<Void, Never>?
+    let history = TranscriptHistory()
+    /// Everything heard in the current session, kept whole so history holds one
+    /// entry per dictation rather than one per delta, and where the first words
+    /// were typed, which is the part worth knowing when they went somewhere
+    /// unexpected.
+    private var sessionTranscript = ""
+    private var sessionDestination: String?
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -189,6 +196,8 @@ final class AppModel: ObservableObject {
         phase = .connecting
         level = 0
         bufferedText = ""
+        sessionTranscript = ""
+        sessionDestination = nil
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         insertedCharacters = 0
@@ -268,6 +277,7 @@ final class AppModel: ObservableObject {
         // losing it or pasting it blindly.
         if insertedCharacters == 0, bufferedText.isEmpty, !transcript.isEmpty {
             bufferedText = transcript
+            if sessionTranscript.isEmpty { sessionTranscript = transcript }
             if autoInsertEnabled { flushBufferedTextIfPossible() }
             if phase == .success { return }
         }
@@ -311,6 +321,7 @@ final class AppModel: ObservableObject {
 
     private func receivedDelta(_ delta: String) {
         guard acceptsTranscript, phase == .listening || phase == .finishing, !delta.isEmpty else { return }
+        sessionTranscript += delta
         bufferedText += delta
         if autoInsertEnabled { flushBufferedTextIfPossible() }
     }
@@ -327,6 +338,9 @@ final class AppModel: ObservableObject {
         case .inserted:
             bufferedText = ""
             insertedCharacters += pending.count
+            if sessionDestination == nil {
+                sessionDestination = NSWorkspace.shared.frontmostApplication?.localizedName
+            }
             logger.debug("Flushed \(pending.count, privacy: .public) buffered characters")
             bufferFlushTask?.cancel()
             bufferFlushTask = nil
@@ -393,6 +407,14 @@ final class AppModel: ObservableObject {
         acceptsTranscript = false
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
+        // Every ending funnels through here — finished, failed, dismissed, or
+        // given up on — so this is the one place the session can be written down.
+        history.remember(
+            sessionTranscript,
+            destination: sessionDestination,
+            delivered: insertedCharacters > 0
+        )
+        sessionTranscript = ""
         phase = .idle
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil
