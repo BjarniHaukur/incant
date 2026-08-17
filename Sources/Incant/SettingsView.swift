@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var accessibilityGranted = false
     @State private var showingRecognitionContext = false
+    @State private var editingAPIKey = false
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -60,6 +61,13 @@ struct SettingsView: View {
         }
     }
 
+    /// A stored key used to be a dead end: the row showed a line of text and a
+    /// checkmark, and the field only came back when the draft was non-empty, which
+    /// needed a field to type into. Now the line itself is the way back in.
+    private var isEditingAPIKey: Bool {
+        !model.usesEnvironmentKey && (editingAPIKey || !model.hasAPIKey || !model.apiKeyDraft.isEmpty)
+    }
+
     @ViewBuilder
     private var apiKeyRow: some View {
         HStack(spacing: 14) {
@@ -67,28 +75,59 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("OpenAI API key").font(.system(size: 14, weight: .medium))
                 if model.usesEnvironmentKey {
+                    // An environment key wins over the Keychain, so editing one
+                    // here would change nothing anybody could see.
                     Text("Loaded from your environment")
                         .font(.caption).foregroundStyle(.white.opacity(0.42))
-                } else if model.hasAPIKey && model.apiKeyDraft.isEmpty {
-                    Text("Stored securely in Keychain")
-                        .font(.caption).foregroundStyle(.white.opacity(0.42))
-                } else {
+                } else if isEditingAPIKey {
                     SecureField("sk-…", text: $model.apiKeyDraft)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, design: .monospaced))
                         .padding(.horizontal, 10).frame(height: 30)
                         .background(.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                        .onSubmit { saveAPIKey() }
+                    if !model.apiKeyDraft.isEmpty, !model.apiKeyDraft.hasPrefix("sk-") {
+                        Text("Keys begin with sk-")
+                            .font(.caption).foregroundStyle(.orange.opacity(0.8))
+                    }
+                } else {
+                    Button { editingAPIKey = true } label: {
+                        HStack(spacing: 5) {
+                            Text("Stored securely in Keychain")
+                            Image(systemName: "pencil").font(.system(size: 9, weight: .semibold))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.42))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Replace the stored key")
                 }
             }
             Spacer(minLength: 10)
-            if !model.usesEnvironmentKey && (!model.hasAPIKey || !model.apiKeyDraft.isEmpty) {
-                Button("Save") { model.saveAPIKey() }
+            if isEditingAPIKey {
+                if model.hasAPIKey {
+                    Button("Cancel") {
+                        model.apiKeyDraft = ""
+                        editingAPIKey = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+                }
+                Button("Save") { saveAPIKey() }
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.blue)
+                    .disabled(model.apiKeyDraft.isEmpty)
             } else {
                 Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.blue)
             }
         }
         .padding(.horizontal, 16).frame(minHeight: 68)
+    }
+
+    private func saveAPIKey() {
+        model.saveAPIKey()
+        if model.keySaved { editingAPIKey = false }
     }
 
     private var accessibilityRow: some View {
