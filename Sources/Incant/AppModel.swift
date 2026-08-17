@@ -36,6 +36,8 @@ final class AppModel: ObservableObject {
 
     private let audio = AudioCapture()
     private let transcriber = RealtimeTranscriber()
+    private let lidAngle = LidAngleSensor()
+    private let headphoneMotion = HeadphoneMotionSensor()
     private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Dictation")
     private var finishTimeout: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -74,6 +76,24 @@ final class AppModel: ObservableObject {
         case .success: return "Done"
         case .error(let message): return message
         }
+    }
+
+    init() {
+        // The hinge is horizontal, so swinging the lid throws the fluid up or down
+        // the inside of the sphere. Free to watch and needs no permission, so it
+        // runs whenever Incant does.
+        lidAngle.onChange = { [weak self] _, degreesPerSecond in
+            let energy = Float(min(abs(degreesPerSecond) / 80, 1.8))
+            guard energy > 0.03 else { return }
+            self?.injectAmbientMotion(
+                direction: SIMD2(0, degreesPerSecond > 0 ? -1 : 1),
+                energy: energy
+            )
+        }
+        headphoneMotion.onMotion = { [weak self] direction, energy in
+            self?.injectAmbientMotion(direction: direction, energy: energy)
+        }
+        lidAngle.start()
     }
 
     func toggleRecording() {
@@ -169,6 +189,17 @@ final class AppModel: ObservableObject {
         decayOrbMotion()
     }
 
+    /// Motion that came from the world rather than from a hand on the window: the
+    /// lid swinging, or the head the AirPods are on. It takes the same path as a
+    /// window drag — the glass shell accelerates and the fluid lags behind it.
+    func injectAmbientMotion(direction: SIMD2<Float>, energy: Float) {
+        let length = simd_length(direction)
+        guard length > 0.0001, energy > 0.004 else { return }
+        orbMotion = simd_normalize(orbMotion * 0.25 + (direction / length) * 0.75)
+        orbMotionEnergy = max(orbMotionEnergy, min(1.8, energy))
+        decayOrbMotion()
+    }
+
     private func decayOrbMotion() {
         motionDecayTask?.cancel()
         motionDecayTask = Task { [weak self] in
@@ -222,6 +253,7 @@ final class AppModel: ObservableObject {
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
         acceptsTranscript = true
+        headphoneMotion.start()
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
 
@@ -423,6 +455,7 @@ final class AppModel: ObservableObject {
 
     private func settleToIdle() {
         acceptsTranscript = false
+        headphoneMotion.stop()
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         // Every ending funnels through here — finished, failed, dismissed, or
