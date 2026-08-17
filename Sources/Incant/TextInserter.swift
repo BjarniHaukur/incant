@@ -32,7 +32,8 @@ enum TextInserter {
     }
 
     static func captureTarget() -> Target? {
-        guard AXIsProcessTrusted(), let focused = focusedElement(), isEditable(focused) else {
+        guard AXIsProcessTrusted(), let focused = focusedElement(),
+              isEditable(focused) || isWebContext(focused) else {
             return nil
         }
         return Target(element: focused)
@@ -45,28 +46,24 @@ enum TextInserter {
         // Prefer replacing the focused element's current selection. This is
         // the most direct insertion path and keeps the caret in the target app.
         let focusedTarget = target?.element ?? focusedElement()
-        guard let focused = focusedTarget, isEditable(focused) else {
-            logRefusal(focusedTarget)
+        guard let focused = focusedTarget else {
+            logRefusal(nil)
+            return .noEditableTarget
+        }
+        if isEditable(focused), replaceSelection(with: text, in: focused) { return .inserted }
+
+        // Keystrokes land wherever the keyboard is pointed, and in a browser that
+        // is not where the accessibility tree says focus is: Chrome reports the
+        // focused element as a button while the characters arrive in the search
+        // field. So anything that came out of a web page is worth typing into and
+        // the page decides where it goes, exactly as the user's own typing would.
+        // Elsewhere this stays narrow, because Unicode events aimed at an
+        // arbitrary button trigger shortcuts and macOS's repeated error sound.
+        guard isEditable(focused) || isWebContext(focused) else {
+            logRefusal(focused)
             return .noEditableTarget
         }
 
-        var selectedTextSettable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(
-            focused,
-            kAXSelectedTextAttribute as CFString,
-            &selectedTextSettable
-        ) == .success, selectedTextSettable.boolValue,
-           AXUIElementSetAttributeValue(
-                focused,
-                kAXSelectedTextAttribute as CFString,
-                text as CFTypeRef
-           ) == .success {
-            return .inserted
-        }
-
-        // Only validated text controls reach this fallback. Posting Unicode
-        // events at an arbitrary focused button/window causes macOS's repeated
-        // "dun" error sound and can trigger unrelated shortcuts.
         let characters = Array(text.utf16)
         guard !characters.isEmpty else { return .inserted }
         let source = CGEventSource(stateID: .combinedSessionState)
@@ -152,6 +149,86 @@ enum TextInserter {
             return nil
         }
         return focused
+    }
+
+    /// Writes over the current selection and confirms the write actually took.
+    ///
+    /// Slack reports `AXSelectedText` as settable, accepts the write, returns
+    /// success and inserts nothing at all. Believing it cost the whole
+    /// transcript: the caller treated the delta as delivered and cleared the
+    /// buffer behind it, so the words were gone with nothing on screen to
+    /// recover them from. Length and caret position are both checked because
+    /// replacing a selection of the same length leaves the count unchanged.
+    private static func replaceSelection(with text: String, in element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextAttribute as CFString, &settable
+        ) == .success, settable.boolValue else { return false }
+
+        let countBefore = characterCount(of: element)
+        let caretBefore = caretLocation(of: element)
+        guard AXUIElementSetAttributeValue(
+            element, kAXSelectedTextAttribute as CFString, text as CFTypeRef
+        ) == .success else { return false }
+
+        let countAfter = characterCount(of: element)
+        let caretAfter = caretLocation(of: element)
+        if let countBefore, let countAfter, countAfter != countBefore { return true }
+        if let caretBefore, let caretAfter, caretAfter != caretBefore { return true }
+        // Nothing legible to compare against. Trusting the write is what this
+        // method exists to avoid, but typing again would duplicate every delta
+        // in the many apps that simply do not publish their contents, so the
+        // benefit of the doubt goes to the app that claimed success.
+        if countBefore == nil, caretBefore == nil { return true }
+        logger.error("Insertion reported success but changed nothing in \(frontmostName(), privacy: .public)")
+        return false
+    }
+
+    private static func characterCount(of element: AXUIElement) -> Int? {
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXNumberOfCharactersAttribute as CFString, &value
+        ) == .success, let number = value as? Int {
+            return number
+        }
+        return stringAttribute(kAXValueAttribute, from: element)?.count
+    }
+
+    private static func caretLocation(of element: AXUIElement) -> Int? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &value
+        ) == .success, let value else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
+        return range.location
+    }
+
+    /// Did this element come out of a web page? Both Chromium and WebKit hang DOM
+    /// attributes off their nodes, which is a far steadier signal than any role:
+    /// the role a browser reports for the focused element varies by browser, by
+    /// page, and by whether the field is a real input or a contenteditable.
+    private static func isWebContext(_ element: AXUIElement) -> Bool {
+        var current = element
+        for _ in 0..<6 {
+            if stringAttribute(kAXRoleAttribute, from: current) == "AXWebArea" { return true }
+            var names: CFArray?
+            if AXUIElementCopyAttributeNames(current, &names) == .success,
+               let names = names as? [String],
+               names.contains(where: { $0.hasPrefix("AXDOM") }) {
+                return true
+            }
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                current, kAXParentAttribute as CFString, &parent
+            ) == .success, let parent else { return false }
+            current = unsafeBitCast(parent, to: AXUIElement.self)
+        }
+        return false
+    }
+
+    private static func frontmostName() -> String {
+        NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
     }
 
     private static func isEditable(_ element: AXUIElement) -> Bool {
