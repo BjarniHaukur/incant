@@ -28,12 +28,10 @@ of the fluid from it — where the dye sheets lie, how thick they are, which way
 they drift, how fast the dye dissipates, and the random swirl the fluid starts
 from. No two dictations open the same way.
 
-It also answers the room. Swinging the MacBook lid throws the fluid up or down the
-inside of the sphere: the hinge has an angle sensor, reachable as an ordinary HID
-device, which reports whenever it moves. And because no Apple Silicon MacBook has
-an accelerometer — the Sudden Motion Sensor existed to park spinning drives and
-left with them — walking is felt through the only inertial sensor within reach of
-a Mac, the one in a pair of AirPods.
+It also answers the room, quietly. Swinging the MacBook lid throws the fluid up or
+down the inside of the sphere: the hinge has an angle sensor, reachable as an
+ordinary HID device that reports whenever it moves. Nothing has to be granted for
+it, and nothing tells you it is there.
 
 ## Build
 
