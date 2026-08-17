@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var accessibilityGranted = false
     @State private var showingRecognitionContext = false
     @State private var editingAPIKey = false
+    @State private var hoveringAPIKeyStatus = false
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -61,11 +62,22 @@ struct SettingsView: View {
         }
     }
 
-    /// A stored key used to be a dead end: the row showed a line of text and a
+    /// A settled key used to be a dead end: the row showed a line of text and a
     /// checkmark, and the field only came back when the draft was non-empty, which
-    /// needed a field to type into. Now the line itself is the way back in.
+    /// needed a field to type into. The checkmark is now the way back in.
     private var isEditingAPIKey: Bool {
-        !model.usesEnvironmentKey && (editingAPIKey || !model.hasAPIKey || !model.apiKeyDraft.isEmpty)
+        editingAPIKey || !model.hasAPIKey || !model.apiKeyDraft.isEmpty
+    }
+
+    /// Where the key in use is coming from, said plainly, because an environment
+    /// variable and a Keychain entry are easy to confuse when only one can win.
+    private var apiKeySource: String {
+        if model.hasStoredKey {
+            return model.hasEnvironmentKey
+                ? "Stored in Keychain, overriding your environment"
+                : "Stored securely in Keychain"
+        }
+        return "Loaded from your environment"
     }
 
     @ViewBuilder
@@ -74,12 +86,7 @@ struct SettingsView: View {
             statusOrb(ready: model.hasAPIKey, color: .blue)
             VStack(alignment: .leading, spacing: 4) {
                 Text("OpenAI API key").font(.system(size: 14, weight: .medium))
-                if model.usesEnvironmentKey {
-                    // An environment key wins over the Keychain, so editing one
-                    // here would change nothing anybody could see.
-                    Text("Loaded from your environment")
-                        .font(.caption).foregroundStyle(.white.opacity(0.42))
-                } else if isEditingAPIKey {
+                if isEditingAPIKey {
                     SecureField("sk-…", text: $model.apiKeyDraft)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, design: .monospaced))
@@ -91,21 +98,22 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.orange.opacity(0.8))
                     }
                 } else {
-                    Button { editingAPIKey = true } label: {
-                        HStack(spacing: 5) {
-                            Text("Stored securely in Keychain")
-                            Image(systemName: "pencil").font(.system(size: 9, weight: .semibold))
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.42))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Replace the stored key")
+                    Text(apiKeySource)
+                        .font(.caption).foregroundStyle(.white.opacity(0.42))
                 }
             }
             Spacer(minLength: 10)
             if isEditingAPIKey {
+                if model.hasStoredKey, model.hasEnvironmentKey {
+                    Button("Use environment") {
+                        model.useEnvironmentKey()
+                        editingAPIKey = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+                    .help("Forget the stored key and fall back to OPENAI_API_KEY")
+                }
                 if model.hasAPIKey {
                     Button("Cancel") {
                         model.apiKeyDraft = ""
@@ -119,7 +127,27 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.blue)
                     .disabled(model.apiKeyDraft.isEmpty)
             } else {
-                Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.blue)
+                // The checkmark is the way back in: hovering it offers the pencil,
+                // so a settled key can be replaced without a control sitting there
+                // asking to be used.
+                Button { editingAPIKey = true } label: {
+                    Image(systemName: hoveringAPIKeyStatus ? "pencil" : "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(hoveringAPIKeyStatus ? .white.opacity(0.85) : .white.opacity(0.42))
+                        .frame(width: 26, height: 22)
+                        .background(
+                            .white.opacity(hoveringAPIKeyStatus ? 0.14 : 0),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(.white.opacity(hoveringAPIKeyStatus ? 0.16 : 0), lineWidth: 0.7)
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveringAPIKeyStatus = $0 }
+                .help("Use a different key")
             }
         }
         .padding(.horizontal, 16).frame(minHeight: 68)

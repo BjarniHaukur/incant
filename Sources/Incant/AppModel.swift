@@ -59,8 +59,14 @@ final class AppModel: ObservableObject {
     /// left to explain where the text came from.
     private var acceptsTranscript = false
 
-    var hasAPIKey: Bool { KeychainStore.load() != nil }
-    var usesEnvironmentKey: Bool { KeychainStore.environmentKey() != nil }
+    // Both answered without opening the Keychain, because the settings row asks
+    // them on every redraw and opening it can raise a system prompt.
+    var hasAPIKey: Bool { KeychainStore.hasStoredKey || KeychainStore.environmentKey() != nil }
+    var hasStoredKey: Bool { KeychainStore.hasStoredKey }
+    var hasEnvironmentKey: Bool { KeychainStore.environmentKey() != nil }
+    /// True only when the key actually in use came from the environment, which is
+    /// no longer the same as "the environment has one".
+    var usesEnvironmentKey: Bool { !hasStoredKey && hasEnvironmentKey }
     var bufferedTextPreview: String { String(bufferedText.suffix(260)) }
     var recognitionPromptSummary: String {
         recognitionPrompt.isEmpty ? "Give Incant context about how you speak" : "Custom context added"
@@ -116,6 +122,14 @@ final class AppModel: ObservableObject {
         } catch {
             keySaved = false
         }
+    }
+
+    /// Drops the key typed into Incant, which hands the job back to whatever the
+    /// environment provides — the way out of an override.
+    func useEnvironmentKey() {
+        KeychainStore.forgetStoredKey()
+        apiKeyDraft = ""
+        keySaved = false
     }
 
     func saveRecognitionPrompt(_ text: String) {
