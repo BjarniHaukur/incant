@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showingRecognitionContext = false
     @State private var editingAPIKey = false
     @State private var hoveringAPIKeyStatus = false
+    @FocusState private var apiKeyFieldFocused: Bool
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -55,7 +56,12 @@ struct SettingsView: View {
         }
         .frame(width: 520, height: 700)
         .preferredColorScheme(.dark)
-        .onAppear { accessibilityGranted = TextInserter.isAccessibilityGranted }
+        .onAppear {
+            accessibilityGranted = TextInserter.isAccessibilityGranted
+            // On a first run the field is the only thing to do here, so a pasted
+            // key should land without hunting for the caret first.
+            apiKeyFieldFocused = !model.hasAPIKey
+        }
         .onReceive(permissionTimer) { _ in accessibilityGranted = TextInserter.isAccessibilityGranted }
         .sheet(isPresented: $showingRecognitionContext) {
             RecognitionContextEditor(model: model)
@@ -92,10 +98,11 @@ struct SettingsView: View {
                         .font(.system(size: 13, design: .monospaced))
                         .padding(.horizontal, 10).frame(height: 30)
                         .background(.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                        .focused($apiKeyFieldFocused)
                         .onSubmit { saveAPIKey() }
-                    if !model.apiKeyDraft.isEmpty, !model.apiKeyDraft.hasPrefix("sk-") {
-                        Text("Keys begin with sk-")
-                            .font(.caption).foregroundStyle(.orange.opacity(0.8))
+                    if let error = model.apiKeyError {
+                        Text(error)
+                            .font(.caption).foregroundStyle(.orange.opacity(0.85))
                     }
                 } else {
                     Text(apiKeySource)
@@ -123,9 +130,10 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.4))
                 }
+                // Never disabled: a greyed-out Save with no explanation is how a
+                // first run dead-ends. Pressing it always answers.
                 Button("Save") { saveAPIKey() }
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.blue)
-                    .disabled(model.apiKeyDraft.isEmpty)
             } else {
                 // The checkmark is the way back in: hovering it offers the pencil,
                 // so a settled key can be replaced without a control sitting there

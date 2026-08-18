@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var recognitionPrompt = AppModel.loadRecognitionPrompt()
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
+    @Published private(set) var apiKeyError: String?
 
     var showRecorder: (() -> Void)?
     var hideRecorder: (() -> Void)?
@@ -109,18 +110,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Says why it refused. Saving used to fail in silence, which on a fresh
+    /// install is indistinguishable from a button that does nothing.
     func saveAPIKey() {
         let key = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            keySaved = false
+            apiKeyError = "Paste a key first"
+            return
+        }
         guard key.hasPrefix("sk-") else {
             keySaved = false
+            apiKeyError = "Keys begin with sk-"
             return
         }
         do {
             try KeychainStore.save(key)
             apiKeyDraft = ""
             keySaved = true
+            apiKeyError = nil
         } catch {
             keySaved = false
+            apiKeyError = "Could not write to the Keychain"
+            logger.error("Keychain save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -130,6 +142,7 @@ final class AppModel: ObservableObject {
         KeychainStore.forgetStoredKey()
         apiKeyDraft = ""
         keySaved = false
+        apiKeyError = nil
     }
 
     func saveRecognitionPrompt(_ text: String) {

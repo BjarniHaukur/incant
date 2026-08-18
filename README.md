@@ -37,8 +37,17 @@ it, and nothing tells you it is there.
 
 ```sh
 ./build-app.sh
-open dist/Incant.app
+cp -R dist/Incant.app /Applications/
+open /Applications/Incant.app
 ```
+
+Install it rather than running it out of `dist/`. Both are complete apps carrying
+the same bundle identifier, and macOS records Accessibility approval per app — so
+two copies split the approval in two, and granting it to one leaves the other
+running untrusted with a switch that appears to do nothing. Ad-hoc signing makes
+this worse: every rebuild is a new code identity, so approval has to be granted
+again. `tccutil reset Accessibility com.bjarni.Incant` clears the record when it
+gets into a state that will not budge.
 
 The API key is stored in macOS Keychain. Incant needs Microphone permission
 and Accessibility permission for text insertion in apps that do not expose a
