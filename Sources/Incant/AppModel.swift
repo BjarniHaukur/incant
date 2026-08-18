@@ -168,6 +168,13 @@ final class AppModel: ObservableObject {
         TextInserter.requestAccessibilityPermission()
     }
 
+    /// Forgets the approval so macOS will ask again, then asks. The way out of an
+    /// entry that exists, no longer matches, and cannot be switched back on.
+    func repairAccessibility() {
+        TextInserter.resetAccessibilityApproval()
+        TextInserter.requestAccessibilityPermission()
+    }
+
     func setAutoInsertEnabled(_ enabled: Bool) {
         autoInsertEnabled = enabled
         if enabled {

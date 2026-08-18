@@ -26,9 +26,46 @@ enum TextInserter {
 
     static var isAccessibilityGranted: Bool { AXIsProcessTrusted() }
 
+    /// Asks for Accessibility, and falls back to somewhere the user can actually
+    /// act.
+    ///
+    /// The system shows its prompt once per app identity and never again once an
+    /// entry exists for it — including a stale entry from an earlier build, and
+    /// including one that is switched off. After that the call just returns false,
+    /// so a button wired only to this does nothing at all and says nothing about
+    /// why. Opening the pane is the honest second move.
     static func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        guard !AXIsProcessTrustedWithOptions(options) else { return }
+        openAccessibilitySettings()
+    }
+
+    static func openAccessibilitySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Clears Incant's own Accessibility record so the system is willing to ask
+    /// again.
+    ///
+    /// Ad-hoc signing gives every build a new code identity, so approvals stop
+    /// matching the app that asked for them and cannot be repaired from the
+    /// switch — the entry is there, it no longer applies, and no prompt will come.
+    /// Removing the record is the way out, and it only ever touches this app.
+    static func resetAccessibilityApproval() {
+        let identifier = Bundle.main.bundleIdentifier ?? "com.bjarni.Incant"
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "Accessibility", identifier]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            logger.info("Reset Accessibility approval for \(identifier, privacy: .public)")
+        } catch {
+            logger.error("Could not reset approval: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     static func captureTarget() -> Target? {
