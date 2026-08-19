@@ -164,13 +164,18 @@ final class AppModel: ObservableObject {
         showSettings?()
     }
 
+    /// Asks for Accessibility, having first thrown away whatever answer the
+    /// system is holding.
+    ///
+    /// The three states a refused Incant can be in — never asked, asked and
+    /// refused, and approved under a build that no longer exists — look identical
+    /// from here and only the first of them will produce a prompt. Since all
+    /// three mean Incant is untrusted, there is no approval to lose by clearing
+    /// the record, and clearing it is what makes the system willing to ask again.
+    /// That is why this is the only button in the row: nothing is left for a
+    /// second one to do.
     func requestAccessibility() {
-        TextInserter.requestAccessibilityPermission()
-    }
-
-    /// Forgets the approval so macOS will ask again, then asks. The way out of an
-    /// entry that exists, no longer matches, and cannot be switched back on.
-    func repairAccessibility() {
+        guard !TextInserter.isAccessibilityGranted else { return }
         TextInserter.resetAccessibilityApproval()
         TextInserter.requestAccessibilityPermission()
     }

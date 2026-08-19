@@ -46,8 +46,9 @@ the same bundle identifier, and macOS records Accessibility approval per app —
 two copies split the approval in two, and granting it to one leaves the other
 running untrusted with a switch that appears to do nothing. Ad-hoc signing makes
 this worse: every rebuild is a new code identity, so approval has to be granted
-again. `tccutil reset Accessibility com.bjarni.Incant` clears the record when it
-gets into a state that will not budge.
+again. Allow, in the settings row, clears the record before it asks, which is what
+gets a state that will not budge to budge; `tccutil reset Accessibility
+com.bjarni.Incant` is the same move from a terminal.
 
 The API key is stored in macOS Keychain. Incant needs Microphone permission
 and Accessibility permission for text insertion in apps that do not expose a

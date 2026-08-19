@@ -183,16 +183,12 @@ struct SettingsView: View {
                 .controlSize(.small)
                 .tint(model.autoInsertEnabled ? .cyan : .gray)
             } else {
-                // Allow opens the pane when the prompt is spent. Repair is for when
-                // even the pane cannot fix it, because the entry there belongs to a
-                // build that no longer exists.
-                Button("Repair") { model.repairAccessibility() }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.4))
-                    .help("Forget Incant's Accessibility approval so macOS asks again")
+                // Asking is the whole of it. A spent prompt or an entry from an
+                // earlier build used to need a second button; now this one clears
+                // the record first, so it always leads somewhere.
                 Button("Allow") { model.requestAccessibility() }
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(.cyan)
+                    .help("Ask macOS again, forgetting an approval left behind by an earlier build")
             }
         }
         .padding(.horizontal, 16).frame(minHeight: 68)
@@ -200,7 +196,7 @@ struct SettingsView: View {
 
     private var cursorTypingDescription: String {
         guard accessibilityGranted else {
-            return "Allow Incant to insert live text · Repair if nothing happens"
+            return "Allow Incant to insert live text"
         }
         return model.autoInsertEnabled ? "Stream words at the current cursor" : "Hold words in Incant for editing"
     }
