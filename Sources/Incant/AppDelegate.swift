@@ -8,10 +8,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var recorderPanel: NSPanel?
     private var settingsWindow: NSWindow?
     private var motionSamples: [ObjectIdentifier: (origin: NSPoint, time: TimeInterval)] = [:]
+    /// The corner the panel was last put at by code. A move that reports exactly
+    /// this corner is our own placement rather than the user dragging the stone,
+    /// whether the notification arrives inside `setFrameOrigin` or a turn of the
+    /// run loop later.
+    private var placedRecorderCorner: NSPoint?
     /// Bumped by every show and hide. The fade-out's completion handler carries
     /// the token it was scheduled with, so a session that starts while the
     /// previous one is still fading cannot be ordered out by that stale handler.
     private var recorderVisibility = 0
+    private static let recorderCornerKey = "recorderOrbCorner"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
@@ -122,12 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showRecorder() {
         guard let panel = recorderPanel else { return }
         recorderVisibility += 1
-        let frame = NSScreen.main?.visibleFrame ?? NSScreen.screens[0].visibleFrame
-        let origin = NSPoint(
-            x: frame.midX - panel.frame.width / 2,
-            y: frame.minY + 86
-        )
-        panel.setFrameOrigin(origin)
+        placeRecorder(panel)
         rememberMotionSample(for: panel)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -135,6 +136,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             context.duration = 0.16
             panel.animator().alphaValue = 1
         }
+    }
+
+    /// Puts the stone back where the user dragged it. Without a remembered
+    /// corner — or with one that no longer lands on a screen, as after a display
+    /// is unplugged — it opens above the bottom of the active screen.
+    private func placeRecorder(_ panel: NSPanel) {
+        var origin: NSPoint
+        if let corner = storedRecorderCorner, isOnAScreen(corner, of: panel) {
+            origin = NSPoint(x: corner.x, y: corner.y - panel.frame.height)
+        } else {
+            let screen = NSScreen.main?.visibleFrame ?? NSScreen.screens[0].visibleFrame
+            origin = NSPoint(x: screen.midX - panel.frame.width / 2, y: screen.minY + 86)
+        }
+        // Recorded before the move, because the notification it provokes can
+        // arrive before `setFrameOrigin` returns.
+        placedRecorderCorner = NSPoint(x: origin.x, y: origin.y + panel.frame.height)
+        panel.setFrameOrigin(origin)
+    }
+
+    /// True when the middle of the panel — where the stone sits, and where the
+    /// pointer has to be to drag it — still falls on a screen the user has. The
+    /// panel's transparent edges may hang off, so a stone parked at the edge of a
+    /// screen comes back parked at the edge.
+    private func isOnAScreen(_ corner: NSPoint, of panel: NSPanel) -> Bool {
+        let middle = NSPoint(
+            x: corner.x + panel.frame.width / 2,
+            y: corner.y - panel.frame.height / 2
+        )
+        return NSScreen.screens.contains { $0.frame.contains(middle) }
+    }
+
+    /// The panel's top-left corner, which is the part of it that holds still: the
+    /// orb view sizes the window to its content, and a window grows and shrinks
+    /// away from that corner, so it is the only anchor that survives the
+    /// composer appearing or the transcript arriving.
+    private func corner(of window: NSWindow) -> NSPoint {
+        NSPoint(x: window.frame.minX, y: window.frame.maxY)
+    }
+
+    /// Kept in defaults rather than in memory, so the place the user chose
+    /// survives a relaunch as well as a toggle.
+    private var storedRecorderCorner: NSPoint? {
+        guard let stored = UserDefaults.standard.array(forKey: Self.recorderCornerKey) as? [Double],
+              stored.count == 2 else { return nil }
+        return NSPoint(x: stored[0], y: stored[1])
+    }
+
+    private func rememberRecorderCorner(_ corner: NSPoint) {
+        UserDefaults.standard.set([corner.x, corner.y], forKey: Self.recorderCornerKey)
     }
 
     private func hideRecorder() {
@@ -166,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
               window === settingsWindow || window === recorderPanel else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let origin = window.frame.origin
+        if window === recorderPanel, corner(of: window) != placedRecorderCorner {
+            rememberRecorderCorner(corner(of: window))
+        }
         let id = ObjectIdentifier(window)
         guard let sample = motionSamples[id] else {
             rememberMotionSample(for: window)
