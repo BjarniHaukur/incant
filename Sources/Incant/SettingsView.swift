@@ -227,12 +227,12 @@ struct SettingsView: View {
                     : .blue
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text("Incantation mode").font(.system(size: 14, weight: .medium))
+                Text("Incantation").font(.system(size: 14, weight: .medium))
                 Text(model.transcriptionMode.summary)
                     .font(.caption).foregroundStyle(.white.opacity(0.42))
             }
             Spacer(minLength: 12)
-            Picker("Incantation mode", selection: Binding(
+            Picker("Incantation", selection: Binding(
                 get: { model.transcriptionMode },
                 set: { model.setTranscriptionMode($0) }
             )) {
@@ -243,7 +243,7 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(width: 174)
-            .help("Direct stays literal. Incantation writes live, then refines the same words from their audible delivery.")
+            .help("Direct stays literal. Expressive writes live, then refines the same words from their audible delivery.")
         }
         .padding(.horizontal, 16).frame(minHeight: 72)
     }

@@ -174,7 +174,7 @@ actor RealtimeTranscriber {
             } else if let response = event["response"] as? [String: Any],
                       let status = response["status"] as? String,
                       status == "failed" || status == "incomplete" {
-                onError("Incantation transcription did not complete")
+                onError("Expressive transcription did not complete")
             }
         case "error":
             let details = event["error"] as? [String: Any]

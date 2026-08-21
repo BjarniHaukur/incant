@@ -54,7 +54,7 @@ final class AppModel: ObservableObject {
     private var sessionTranscript = ""
     private var sessionDestination: String?
     private var sessionInsertionTarget: TextInserter.Target?
-    /// The exact low-latency draft successfully written by Incantation mode.
+    /// The exact low-latency draft successfully written by Expressive mode.
     /// The expressive pass may replace it only if it is still directly behind
     /// the caret, so a user edit can never be overwritten speculatively.
     private var insertedIncantationDraft = ""

@@ -9,7 +9,7 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .direct: "Direct"
-        case .intonation: "Incantation"
+        case .intonation: "Expressive"
         }
     }
 
