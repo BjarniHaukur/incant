@@ -489,10 +489,11 @@ final class AppModel: ObservableObject {
               !delta.isEmpty else { return }
         sessionTranscript += delta
         bufferedText += delta
-        // Intonation is generated only after Stop. Let the full styled result
-        // settle before inserting it so Markdown emphasis and punctuation land
-        // atomically rather than visibly assembling at the user's cursor.
-        if activeTranscriptionMode == .direct, autoInsertEnabled {
+        // Realtime text output is append-only, including the Markdown markers
+        // Intonation uses for audible stress. Insert those deltas immediately:
+        // waiting for response.done added the entire generation time after the
+        // user had already released the hotkey, which made the mode feel stuck.
+        if autoInsertEnabled {
             flushBufferedTextIfPossible()
         }
     }
