@@ -10,16 +10,14 @@
 
 Press **Command-Shift-Space** to start recording. Press it again to commit the
 audio and stop. In Direct mode, transcript deltas are inserted continuously at
-the focused cursor while you speak. Expressive mode does that too, then uses the
-complete delivery to refine those words with audible emphasis after you stop.
+the focused cursor while you speak. Expressive mode uses the same append-only
+stream with slightly more latency and a stronger prompt for audible emphasis.
 
 The **Incantation** setting has two modes. **Direct** uses `gpt-live-transcribe`
-and streams a literal transcript while you speak. **Expressive** also streams a
-live draft, then asks `gpt-realtime-2.1` for text only and replaces that draft
-with punctuation and restrained Markdown emphasis informed by the full audio.
-Its instructions
-forbid answers, paraphrase, commentary and invented emotion: it is still a
-transcription mode, just one allowed to hear how the words were delivered.
+and streams a literal transcript while you speak. **Expressive** uses the same
+model at medium latency with stronger context asking it to preserve audible
+cadence and feeling through punctuation and restrained Markdown emphasis. It
+never revises text already inserted into another application.
 
 ## The orb
 

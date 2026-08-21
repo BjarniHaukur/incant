@@ -54,11 +54,6 @@ final class AppModel: ObservableObject {
     private var sessionTranscript = ""
     private var sessionDestination: String?
     private var sessionInsertionTarget: TextInserter.Target?
-    /// The exact low-latency draft successfully written by Expressive mode.
-    /// The expressive pass may replace it only if it is still directly behind
-    /// the caret, so a user edit can never be overwritten speculatively.
-    private var insertedIncantationDraft = ""
-    private var expressiveTranscript = ""
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
@@ -306,10 +301,7 @@ final class AppModel: ObservableObject {
         bufferedText = ""
         sessionTranscript = ""
         sessionDestination = nil
-        insertedIncantationDraft = ""
-        expressiveTranscript = ""
-        // Preserve the editor that owns the caret for both live writing and the
-        // safe Incantation refinement after recording stops.
+        // Preserve the editor that owns the caret for live writing.
         sessionInsertionTarget = TextInserter.captureTarget()
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
@@ -346,14 +338,14 @@ final class AppModel: ObservableObject {
                     mode: self.activeTranscriptionMode,
                     apiKey: apiKey,
                     prompt: self.recognitionPrompt,
-                    onDelta: { [weak self] delta, kind in
+                    onDelta: { [weak self] delta in
                         Task { @MainActor in
-                            self?.receivedDelta(delta, kind: kind, recordingID: recordingID)
+                            self?.receivedDelta(delta, recordingID: recordingID)
                         }
                     },
-                    onFinal: { [weak self] transcript, kind in
+                    onFinal: { [weak self] transcript in
                         Task { @MainActor in
-                            self?.receivedFinal(transcript, kind: kind, recordingID: recordingID)
+                            self?.receivedFinal(transcript, recordingID: recordingID)
                         }
                     },
                     onError: { [weak self] message in
@@ -395,8 +387,8 @@ final class AppModel: ObservableObject {
 
     private func stopRecording() {
         guard let recordingID = activeRecordingID else { return }
-        // Both modes have already streamed a draft. Incantation keeps the orb
-        // present briefly while that same text is refined from the full audio.
+        // Both modes stream directly. Expressive may still have a slightly
+        // larger tail to flush because its transcription latency is higher.
         if activeTranscriptionMode == .direct {
             hideRecorder?()
             NSApplication.shared.dockTile.badgeLabel = nil
@@ -421,34 +413,16 @@ final class AppModel: ObservableObject {
 
         Task { await transcriber.commit(recordingID: recordingID) }
         finishTimeout?.cancel()
-        let timeout: Duration = activeTranscriptionMode == .intonation ? .seconds(6) : .seconds(10)
+        let timeout: Duration = .seconds(10)
         finishTimeout = Task { [weak self] in
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled, let self else { return }
-            // Incantation already delivered a usable live transcript. If its
-            // optional expressive refinement is slow, keep those words and get
-            // out of the user's way instead of turning success into an error.
-            if self.activeTranscriptionMode == .intonation,
-               self.insertedCharacters > 0 || !self.bufferedText.isEmpty {
-                self.logger.info("Expressive refinement timed out; kept live transcript")
-                self.transcriptionFinalReceived = true
-                self.completeTranscription(recordingID: recordingID)
-            } else {
-                self.fail("No transcript received", recordingID: recordingID)
-            }
+            self.fail("No transcript received", recordingID: recordingID)
         }
     }
 
-    private func receivedFinal(
-        _ transcript: String,
-        kind: RealtimeTranscriber.StreamKind,
-        recordingID: UUID
-    ) {
+    private func receivedFinal(_ transcript: String, recordingID: UUID) {
         guard activeRecordingID == recordingID, acceptsTranscript else { return }
-        if activeTranscriptionMode == .intonation, kind == .expressive {
-            finishIncantation(with: transcript, recordingID: recordingID)
-            return
-        }
         finishTimeout?.cancel()
         logger.info("Transcription completed after \(self.insertedCharacters, privacy: .public) live characters")
         transcriptionFinalReceived = true
@@ -503,19 +477,11 @@ final class AppModel: ObservableObject {
         Task { await transcriber.disconnect(recordingID: recordingID) }
     }
 
-    private func receivedDelta(
-        _ delta: String,
-        kind: RealtimeTranscriber.StreamKind,
-        recordingID: UUID
-    ) {
+    private func receivedDelta(_ delta: String, recordingID: UUID) {
         guard activeRecordingID == recordingID,
               acceptsTranscript,
               phase == .listening || phase == .finishing,
               !delta.isEmpty else { return }
-        if activeTranscriptionMode == .intonation, kind == .expressive {
-            expressiveTranscript += delta
-            return
-        }
         sessionTranscript += delta
         bufferedText += delta
         if autoInsertEnabled {
@@ -535,9 +501,6 @@ final class AppModel: ObservableObject {
         case .inserted:
             bufferedText = ""
             insertedCharacters += pending.count
-            if activeTranscriptionMode == .intonation, !transcriptionFinalReceived {
-                insertedIncantationDraft += pending
-            }
             if sessionDestination == nil {
                 sessionDestination = NSWorkspace.shared.frontmostApplication?.localizedName
             }
@@ -556,52 +519,6 @@ final class AppModel: ObservableObject {
             guard let recordingID = activeRecordingID else { return }
             fail("Allow Accessibility access", recordingID: recordingID)
         }
-    }
-
-    private func finishIncantation(with finalText: String, recordingID: UUID) {
-        finishTimeout?.cancel()
-        transcriptionFinalReceived = true
-        let styled = finalText.isEmpty ? expressiveTranscript : finalText
-        guard !styled.isEmpty else {
-            fail("Nothing heard", recordingID: recordingID)
-            return
-        }
-        expressiveTranscript = styled
-        sessionTranscript = styled
-
-        // Any live draft still buffered was never visible, so discard it in
-        // favor of the complete styled transcript. If some draft was inserted,
-        // replace it only when the exact text is still immediately behind the
-        // caret. Moving the caret or editing the draft makes this safely leave
-        // the live words alone instead of touching unrelated text.
-        bufferedText = ""
-        if !insertedIncantationDraft.isEmpty,
-           let target = sessionInsertionTarget,
-           TextInserter.replaceRecentlyInserted(
-               insertedIncantationDraft,
-               with: styled,
-               target: target
-           ) {
-            insertedCharacters += styled.count - insertedIncantationDraft.count
-            insertedIncantationDraft = styled
-            completeTranscription(recordingID: recordingID)
-            return
-        }
-
-        if insertedIncantationDraft.isEmpty {
-            bufferedText = styled
-            if autoInsertEnabled {
-                flushBufferedTextIfPossible()
-                if bufferedText.isEmpty { return }
-                ensureBufferFlushLoop()
-            } else {
-                completeTranscription(recordingID: recordingID)
-            }
-            return
-        }
-
-        logger.info("Kept edited live draft; expressive version remains in history")
-        completeTranscription(recordingID: recordingID)
     }
 
     private func ensureBufferFlushLoop() {
@@ -675,8 +592,6 @@ final class AppModel: ObservableObject {
             delivered: insertedCharacters > 0
         )
         sessionTranscript = ""
-        insertedIncantationDraft = ""
-        expressiveTranscript = ""
         sessionInsertionTarget = nil
         activeRecordingID = nil
         phase = .idle
