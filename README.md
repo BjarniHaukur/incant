@@ -9,8 +9,16 @@
 </p>
 
 Press **Command-Shift-Space** to start recording. Press it again to commit the
-audio and stop. Transcript deltas are inserted continuously at the focused
-cursor while you speak; stopping never pastes a completed transcript.
+audio and stop. In Direct mode, transcript deltas are inserted continuously at
+the focused cursor while you speak. Intonation mode holds the result until the
+whole delivery can be heard, then inserts it after you stop.
+
+Settings offers two transcription styles. **Direct** uses `gpt-live-transcribe`
+and streams a literal transcript while you speak. **Intonation** waits until you
+stop, asks `gpt-realtime-2.1` for text only, and preserves audible cadence and
+feeling with punctuation plus restrained Markdown emphasis. Its instructions
+forbid answers, paraphrase, commentary and invented emotion: it is still a
+transcription mode, just one allowed to hear how the words were delivered.
 
 ## The orb
 

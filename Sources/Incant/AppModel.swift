@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
     @Published private(set) var shortcutError: String?
     @Published private(set) var recognitionPrompt = AppModel.loadRecognitionPrompt()
+    @Published private(set) var transcriptionMode = AppModel.loadTranscriptionMode()
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
     @Published private(set) var apiKeyError: String?
@@ -39,7 +40,9 @@ final class AppModel: ObservableObject {
     private let transcriber = RealtimeTranscriber()
     private let lidAngle = LidAngleSensor()
     private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Dictation")
+    private var startTask: Task<Void, Never>?
     private var finishTimeout: Task<Void, Never>?
+    private var settleTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
     private var motionDecayTask: Task<Void, Never>?
@@ -50,9 +53,15 @@ final class AppModel: ObservableObject {
     /// unexpected.
     private var sessionTranscript = ""
     private var sessionDestination: String?
+    private var sessionInsertionTarget: TextInserter.Target?
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
+    private var activeTranscriptionMode: TranscriptionMode = .direct
+    /// Async work is tagged with the recording that created it. Rapid toggles
+    /// can otherwise let an old connect, callback, disconnect, or timer mutate
+    /// the new recording without producing an error state.
+    private var activeRecordingID: UUID?
     /// Deltas and a final can still arrive while the Realtime socket closes.
     /// Dismissal stays instant by design — the panel leaves on the hotkey edge
     /// and teardown happens behind it — so this is what stops that tail from
@@ -148,6 +157,11 @@ final class AppModel: ObservableObject {
     func saveRecognitionPrompt(_ text: String) {
         recognitionPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         UserDefaults.standard.set(recognitionPrompt, forKey: Self.recognitionPromptDefaultsKey)
+    }
+
+    func setTranscriptionMode(_ mode: TranscriptionMode) {
+        transcriptionMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.transcriptionModeDefaultsKey)
     }
 
     func updateShortcut(_ shortcut: GlobalHotKey.Shortcut) {
@@ -270,88 +284,150 @@ final class AppModel: ObservableObject {
             return
         }
 
-        guard TextInserter.isAccessibilityGranted else {
-            fail("Allow Accessibility access")
-            TextInserter.requestAccessibilityPermission()
-            return
+        // Starting directly from the brief success/error state is intentional.
+        // Finish archiving that session now and invalidate all delayed work it
+        // left behind before the new recording owns the UI.
+        settleTask?.cancel()
+        if let previousRecordingID = activeRecordingID {
+            settleToIdle(recordingID: previousRecordingID)
         }
 
-        orbSeed = .random()
-        phase = .connecting
+        let recordingID = UUID()
+        activeRecordingID = recordingID
+        activeTranscriptionMode = transcriptionMode
+        finishTimeout?.cancel()
+        startTask?.cancel()
         level = 0
         bufferedText = ""
         sessionTranscript = ""
         sessionDestination = nil
+        // Intonation returns its text only after recording stops. Preserve the
+        // editor that owned the caret now instead of asking Accessibility to
+        // rediscover it several seconds later, when focus may be transient or
+        // the floating recorder may obscure the system-wide focused element.
+        sessionInsertionTarget = TextInserter.captureTarget()
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         insertedCharacters = 0
         accessibilityFailureReported = false
         transcriptionFinalReceived = false
         acceptsTranscript = true
+
+        guard TextInserter.isAccessibilityGranted else {
+            fail("Allow Accessibility access", recordingID: recordingID)
+            TextInserter.requestAccessibilityPermission()
+            return
+        }
+
+        orbSeed = .random()
+        phase = .connecting
         showRecorder?()
         NSApplication.shared.dockTile.badgeLabel = "●"
 
-        Task {
+        startTask = Task { [weak self] in
+            guard let self else { return }
             let micGranted = await AudioCapture.requestPermission()
+            guard !Task.isCancelled,
+                  self.activeRecordingID == recordingID,
+                  self.phase == .connecting else { return }
             guard micGranted else {
-                fail("Microphone access needed")
+                self.fail("Microphone access needed", recordingID: recordingID)
                 return
             }
 
             do {
-                try await transcriber.connect(
+                try await self.transcriber.connect(
+                    recordingID: recordingID,
+                    mode: self.activeTranscriptionMode,
                     apiKey: apiKey,
-                    prompt: recognitionPrompt,
+                    prompt: self.recognitionPrompt,
                     onDelta: { [weak self] delta in
-                        Task { @MainActor in self?.receivedDelta(delta) }
+                        Task { @MainActor in
+                            self?.receivedDelta(delta, recordingID: recordingID)
+                        }
                     },
                     onFinal: { [weak self] transcript in
-                        Task { @MainActor in self?.receivedFinal(transcript) }
+                        Task { @MainActor in
+                            self?.receivedFinal(transcript, recordingID: recordingID)
+                        }
                     },
                     onError: { [weak self] message in
-                        Task { @MainActor in self?.fail(message) }
+                        Task { @MainActor in
+                            self?.fail(message, recordingID: recordingID)
+                        }
                     }
                 )
 
-                try audio.start(
-                    onAudio: { [transcriber] data in
-                        Task { await transcriber.appendAudio(data) }
+                guard !Task.isCancelled,
+                      self.activeRecordingID == recordingID,
+                      self.phase == .connecting else {
+                    await self.transcriber.disconnect(recordingID: recordingID)
+                    return
+                }
+
+                try self.audio.start(
+                    onAudio: { [transcriber = self.transcriber] data in
+                        Task { await transcriber.appendAudio(data, recordingID: recordingID) }
                     },
                     onLevel: { [weak self] value in
                         Task { @MainActor in
-                            guard self?.phase == .listening else { return }
+                            guard self?.activeRecordingID == recordingID,
+                                  self?.phase == .listening else { return }
                             self?.level = CGFloat(value)
                         }
                     }
                 )
-                phase = .listening
+                self.phase = .listening
+            } catch is CancellationError {
+                // A quick stop or a newer recording deliberately invalidated
+                // this connection. Its teardown is scoped by recordingID.
+                await self.transcriber.disconnect(recordingID: recordingID)
             } catch {
-                fail(error.localizedDescription)
+                self.fail(error.localizedDescription, recordingID: recordingID)
             }
         }
     }
 
     private func stopRecording() {
-        // Perceived latency matters more than network teardown here. Remove
-        // the surface on the hotkey edge, then finish the Realtime session in
-        // the background.
-        hideRecorder?()
-        NSApplication.shared.dockTile.badgeLabel = nil
+        guard let recordingID = activeRecordingID else { return }
+        // Direct mode has already streamed its text, so perceived latency wins
+        // and the surface can disappear on the hotkey edge. Intonation only
+        // starts producing text after commit; keep the orb present so its
+        // longer, expressive pass never looks like another silent freeze.
+        if activeTranscriptionMode == .direct {
+            hideRecorder?()
+            NSApplication.shared.dockTile.badgeLabel = nil
+        } else {
+            NSApplication.shared.dockTile.badgeLabel = "…"
+        }
+        startTask?.cancel()
         audio.stop()
         level = 0
+
+        // If stop beats connection setup there is no committed audio to wait
+        // for. End this attempt immediately; the tagged teardown cannot cancel
+        // a recording started on the next hotkey press.
+        if phase == .connecting {
+            acceptsTranscript = false
+            settleToIdle(recordingID: recordingID)
+            Task { await transcriber.disconnect(recordingID: recordingID) }
+            return
+        }
+
         phase = .finishing
 
-        Task { await transcriber.commit() }
+        Task { await transcriber.commit(recordingID: recordingID) }
         finishTimeout?.cancel()
+        let timeout: Duration = activeTranscriptionMode == .intonation ? .seconds(25) : .seconds(10)
         finishTimeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(10))
+            try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
-            self?.fail("No transcript received")
+            self?.fail("No transcript received", recordingID: recordingID)
         }
     }
 
-    private func receivedFinal(_ transcript: String) {
-        guard acceptsTranscript else { return }
+    private func receivedFinal(_ transcript: String, recordingID: UUID) {
+        guard activeRecordingID == recordingID, acceptsTranscript else { return }
         finishTimeout?.cancel()
         logger.info("Transcription completed after \(self.insertedCharacters, privacy: .public) live characters")
         transcriptionFinalReceived = true
@@ -368,7 +444,7 @@ final class AppModel: ObservableObject {
 
         if !bufferedText.isEmpty {
             if !autoInsertEnabled {
-                completeTranscription()
+                completeTranscription(recordingID: recordingID)
                 return
             }
             phase = .finishing
@@ -376,44 +452,55 @@ final class AppModel: ObservableObject {
             return
         }
         guard insertedCharacters > 0 else {
-            fail("Nothing heard")
+            fail("Nothing heard", recordingID: recordingID)
             return
         }
-        completeTranscription()
+        completeTranscription(recordingID: recordingID)
     }
 
-    private func completeTranscription() {
+    private func completeTranscription(recordingID: UUID) {
+        guard activeRecordingID == recordingID else { return }
         phase = .success
         NSApplication.shared.dockTile.badgeLabel = nil
-        Task { [weak self] in
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(620))
             guard !Task.isCancelled else { return }
-            self?.settleToIdle()
+            self?.settleToIdle(recordingID: recordingID)
         }
-        Task { await transcriber.disconnect() }
+        Task { await transcriber.disconnect(recordingID: recordingID) }
     }
 
     private func dismissFinishingSession() {
+        guard let recordingID = activeRecordingID else { return }
         acceptsTranscript = false
         hideRecorder?()
         finishTimeout?.cancel()
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
-        settleToIdle()
-        Task { await transcriber.disconnect() }
+        settleToIdle(recordingID: recordingID)
+        Task { await transcriber.disconnect(recordingID: recordingID) }
     }
 
-    private func receivedDelta(_ delta: String) {
-        guard acceptsTranscript, phase == .listening || phase == .finishing, !delta.isEmpty else { return }
+    private func receivedDelta(_ delta: String, recordingID: UUID) {
+        guard activeRecordingID == recordingID,
+              acceptsTranscript,
+              phase == .listening || phase == .finishing,
+              !delta.isEmpty else { return }
         sessionTranscript += delta
         bufferedText += delta
-        if autoInsertEnabled { flushBufferedTextIfPossible() }
+        // Intonation is generated only after Stop. Let the full styled result
+        // settle before inserting it so Markdown emphasis and punctuation land
+        // atomically rather than visibly assembling at the user's cursor.
+        if activeTranscriptionMode == .direct, autoInsertEnabled {
+            flushBufferedTextIfPossible()
+        }
     }
 
     private func flushBufferedTextIfPossible(force: Bool = false) {
         guard force || autoInsertEnabled else { return }
         guard !bufferedText.isEmpty else { return }
-        guard let currentTarget = TextInserter.captureTarget() else {
+        guard let currentTarget = sessionInsertionTarget ?? TextInserter.captureTarget() else {
             ensureBufferFlushLoop()
             return
         }
@@ -428,14 +515,17 @@ final class AppModel: ObservableObject {
             logger.debug("Flushed \(pending.count, privacy: .public) buffered characters")
             bufferFlushTask?.cancel()
             bufferFlushTask = nil
-            if transcriptionFinalReceived { completeTranscription() }
+            if transcriptionFinalReceived, let recordingID = activeRecordingID {
+                completeTranscription(recordingID: recordingID)
+            }
         case .noEditableTarget:
             ensureBufferFlushLoop()
         case .accessibilityDenied:
             logger.error("Live insertion lost Accessibility permission")
             guard !accessibilityFailureReported else { return }
             accessibilityFailureReported = true
-            fail("Allow Accessibility access")
+            guard let recordingID = activeRecordingID else { return }
+            fail("Allow Accessibility access", recordingID: recordingID)
         }
     }
 
@@ -464,31 +554,42 @@ final class AppModel: ObservableObject {
                 self.logger.error(
                     "Gave up inserting \(self.bufferedText.count, privacy: .public) buffered characters"
                 )
-                self.settleToIdle()
+                guard let recordingID = self.activeRecordingID else { return }
+                self.settleToIdle(recordingID: recordingID)
                 return
             }
         }
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ message: String, recordingID: UUID) {
+        guard activeRecordingID == recordingID else { return }
         logger.error("Dictation failed: \(message, privacy: .public)")
         acceptsTranscript = false
+        startTask?.cancel()
         audio.stop()
         finishTimeout?.cancel()
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         phase = .error(message)
         NSApplication.shared.dockTile.badgeLabel = "!"
-        Task { [weak self] in
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2.2))
             guard !Task.isCancelled else { return }
-            self?.settleToIdle()
+            self?.settleToIdle(recordingID: recordingID)
         }
-        Task { await transcriber.disconnect() }
+        Task { await transcriber.disconnect(recordingID: recordingID) }
     }
 
-    private func settleToIdle() {
+    private func settleToIdle(recordingID: UUID) {
+        guard activeRecordingID == recordingID else { return }
         acceptsTranscript = false
+        startTask?.cancel()
+        startTask = nil
+        finishTimeout?.cancel()
+        finishTimeout = nil
+        settleTask?.cancel()
+        settleTask = nil
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
         // Every ending funnels through here — finished, failed, dismissed, or
@@ -499,6 +600,8 @@ final class AppModel: ObservableObject {
             delivered: insertedCharacters > 0
         )
         sessionTranscript = ""
+        sessionInsertionTarget = nil
+        activeRecordingID = nil
         phase = .idle
         level = 0
         NSApplication.shared.dockTile.badgeLabel = nil
@@ -507,6 +610,13 @@ final class AppModel: ObservableObject {
 
     private static let recognitionPromptDefaultsKey = "transcriptionRecognitionPrompt"
     private static let legacyKeywordsDefaultsKey = "transcriptionKeywords"
+    private static let transcriptionModeDefaultsKey = "transcriptionMode"
+
+    private static func loadTranscriptionMode() -> TranscriptionMode {
+        guard let stored = UserDefaults.standard.string(forKey: transcriptionModeDefaultsKey),
+              let mode = TranscriptionMode(rawValue: stored) else { return .direct }
+        return mode
+    }
 
     private static func loadRecognitionPrompt() -> String {
         if let prompt = UserDefaults.standard.string(forKey: recognitionPromptDefaultsKey) {

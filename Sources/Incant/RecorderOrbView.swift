@@ -1,9 +1,6 @@
 import SwiftUI
 
 struct RecorderOrbView: View {
-    /// The stone's own light, used wherever the chrome around it needs a colour.
-    static let stoneLight = Color(red: 0.16, green: 0.4, blue: 0.95)
-
     @ObservedObject var model: AppModel
     var orbDiameter: CGFloat = 150
     var canvasSize: CGFloat = 220
@@ -12,6 +9,14 @@ struct RecorderOrbView: View {
     @State private var copied = false
     @State private var composerHeight: CGFloat = 36
     @State private var showingRecoveryList = false
+
+    /// Direct is the cold, literal stone. Intonation warms the same material
+    /// toward violet so the active interpretation mode is visible at a glance.
+    private var stoneLight: Color {
+        model.transcriptionMode == .intonation
+            ? Color(red: 0.66, green: 0.25, blue: 0.9)
+            : Color(red: 0.16, green: 0.4, blue: 0.95)
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -130,7 +135,7 @@ struct RecorderOrbView: View {
             .padding(.horizontal, 9)
             .frame(height: 20)
             .background(.black.opacity(0.62), in: Capsule())
-            .overlay { Capsule().stroke(Self.stoneLight.opacity(0.18), lineWidth: 0.7) }
+            .overlay { Capsule().stroke(stoneLight.opacity(0.18), lineWidth: 0.7) }
         }
         .buttonStyle(.plain)
         .help(help)
@@ -142,9 +147,9 @@ struct RecorderOrbView: View {
             .background(.black.opacity(composerHovered ? 0.78 : 0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Self.stoneLight.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
+                    .stroke(stoneLight.opacity(composerHovered ? 0.34 : 0.16), lineWidth: 1)
             }
-            .shadow(color: Self.stoneLight.opacity(composerHovered ? 0.09 : 0.03), radius: 16)
+            .shadow(color: stoneLight.opacity(composerHovered ? 0.09 : 0.03), radius: 16)
     }
 
     private func hoverButton(
@@ -158,8 +163,8 @@ struct RecorderOrbView: View {
                 Circle()
                     .fill(RadialGradient(
                         colors: active
-                            ? [Color(red: 0.3, green: 0.6, blue: 1).opacity(0.5), Self.stoneLight.opacity(0.32), Color.black.opacity(0.9)]
-                            : [Color.white.opacity(0.18), Self.stoneLight.opacity(0.1), Color.black.opacity(0.92)],
+                            ? [stoneLight.opacity(0.5), stoneLight.opacity(0.32), Color.black.opacity(0.9)]
+                            : [Color.white.opacity(0.18), stoneLight.opacity(0.1), Color.black.opacity(0.92)],
                         center: UnitPoint(x: 0.36, y: 0.28),
                         startRadius: 0,
                         endRadius: 13
@@ -170,7 +175,7 @@ struct RecorderOrbView: View {
             }
             .frame(width: 20, height: 20)
             .overlay { Circle().stroke(.white.opacity(active ? 0.24 : 0.09), lineWidth: 0.7) }
-            .shadow(color: active ? Color(red: 0.3, green: 0.6, blue: 1).opacity(0.28) : .black.opacity(0.5), radius: 5)
+            .shadow(color: active ? stoneLight.opacity(0.28) : .black.opacity(0.5), radius: 5)
         }
         .buttonStyle(.plain)
         .opacity(composerHovered ? 1 : 0)
@@ -210,11 +215,20 @@ struct RecorderOrbView: View {
     private var glowColor: Color {
         switch model.phase {
         case .error: return Color(red: 1, green: 0.08, blue: 0.03)
-        case .connecting: return Color(red: 0.33, green: 0.24, blue: 1)
-        case .finishing: return Color(red: 0.15, green: 0.24, blue: 0.7)
+        case .connecting:
+            return model.transcriptionMode == .intonation
+                ? Color(red: 0.58, green: 0.16, blue: 0.86)
+                : Color(red: 0.33, green: 0.24, blue: 1)
+        case .finishing:
+            return model.transcriptionMode == .intonation
+                ? Color(red: 0.48, green: 0.12, blue: 0.62)
+                : Color(red: 0.15, green: 0.24, blue: 0.7)
         case .success: return Color(red: 0.05, green: 0.9, blue: 0.65)
         // The uncorrupted stone: what it throws on the desk while it waits.
-        case .idle, .listening: return Color(red: 0.05, green: 0.28, blue: 0.9)
+        case .idle, .listening:
+            return model.transcriptionMode == .intonation
+                ? Color(red: 0.5, green: 0.12, blue: 0.72)
+                : Color(red: 0.05, green: 0.28, blue: 0.9)
         }
     }
 }

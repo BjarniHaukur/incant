@@ -35,6 +35,8 @@ struct SettingsView: View {
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     shortcutRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
+                    transcriptionModeRow
+                    Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     recognitionContextRow
                 }
                 .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -54,7 +56,7 @@ struct SettingsView: View {
             .padding(.horizontal, 34)
             .padding(.top, 12)
         }
-        .frame(width: 520, height: 700)
+        .frame(width: 520, height: 770)
         .preferredColorScheme(.dark)
         .onAppear {
             accessibilityGranted = TextInserter.isAccessibilityGranted
@@ -214,6 +216,36 @@ struct SettingsView: View {
             ShortcutRecorder(shortcut: model.shortcut) { model.updateShortcut($0) }
         }
         .padding(.horizontal, 16).frame(minHeight: 64)
+    }
+
+    private var transcriptionModeRow: some View {
+        HStack(spacing: 14) {
+            statusOrb(
+                ready: true,
+                color: model.transcriptionMode == .intonation
+                    ? Color(red: 0.66, green: 0.25, blue: 0.9)
+                    : .blue
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Transcription style").font(.system(size: 14, weight: .medium))
+                Text(model.transcriptionMode.summary)
+                    .font(.caption).foregroundStyle(.white.opacity(0.42))
+            }
+            Spacer(minLength: 12)
+            Picker("Transcription style", selection: Binding(
+                get: { model.transcriptionMode },
+                set: { model.setTranscriptionMode($0) }
+            )) {
+                ForEach(TranscriptionMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 174)
+            .help("Direct streams literal words. Intonation waits for the whole recording and preserves audible delivery.")
+        }
+        .padding(.horizontal, 16).frame(minHeight: 72)
     }
 
     private var recognitionContextRow: some View {

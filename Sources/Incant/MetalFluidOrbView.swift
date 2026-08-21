@@ -56,6 +56,7 @@ struct MetalFluidOrbView: NSViewRepresentable {
             energy: Float(model.level),
             motion: model.orbMotion,
             motionEnergy: model.orbMotionEnergy,
+            theme: model.transcriptionMode == .intonation ? 1 : 0,
             seed: model.orbSeed
         )
     }
@@ -71,6 +72,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var energy: Float
         var motion: SIMD2<Float>
         var motionEnergy: Float
+        var theme: UInt32
         var seed: OrbSeed
 
         init(
@@ -78,11 +80,13 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             energy: Float,
             motion: SIMD2<Float>,
             motionEnergy: Float,
+            theme: UInt32,
             seed: OrbSeed
         ) {
             self.energy = energy
             self.motion = motion
             self.motionEnergy = motionEnergy
+            self.theme = theme
             self.seed = seed
             switch phase {
             case .idle, .listening: self.phase = 0
@@ -99,6 +103,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         var time: Float
         var energy: Float
         var phase: UInt32
+        var theme: UInt32
         var simSize: SIMD2<Float>
         var outputSize: SIMD2<Float>
         var motion: SIMD2<Float>
@@ -120,6 +125,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         energy: 0,
         motion: .zero,
         motionEnergy: 0,
+        theme: 0,
         seed: .random()
     )
 
@@ -286,6 +292,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             time: time,
             energy: max(envelope, state.phase == 4 ? 0.78 : 0.015),
             phase: state.phase,
+            theme: state.theme,
             simSize: SIMD2(Float(simulationSize), Float(simulationSize)),
             outputSize: outputSize,
             motion: state.motion,
@@ -366,6 +373,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float time;
         float energy;
         uint phase;
+        uint theme;
         float2 simSize;
         float2 outputSize;
         float2 motion;
@@ -666,15 +674,20 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
-    // An uncorrupted palantír is blue. Deep and cold rather than the bright cyan
-    // of something helpful, because the unease is meant to come from the depth,
-    // not from the hue. Red belongs to exactly one state: the one where
-    // something else is looking back, which here is an error.
-    float3 palette(float3 dye, uint phase) {
+    // Direct is an uncorrupted, cold-blue palantír. Intonation is the same stone
+    // lit by an ember-violet interior: warmer and more interpretive, but never
+    // red, because red belongs to exactly one state — an error.
+    float3 palette(float3 dye, uint phase, uint theme) {
         float3 a = float3(.015, .09, .34);
         float3 b = float3(.05, .38, .78);
         float3 c = float3(.14, .04, .46);
-        if (phase == 1) { a = float3(.1, .1, .52); b = float3(.3, .26, .86); c = float3(.03, .24, .7); }
+        if (theme == 1) {
+            a = float3(.075, .025, .3);
+            b = float3(.38, .1, .62);
+            c = float3(.48, .18, .045);
+        }
+        if (phase == 1 && theme == 0) { a = float3(.1, .1, .52); b = float3(.3, .26, .86); c = float3(.03, .24, .7); }
+        if (phase == 1 && theme == 1) { a = float3(.15, .04, .46); b = float3(.54, .17, .78); c = float3(.58, .25, .07); }
         if (phase == 2) { a *= .72; b *= .68; c *= .78; }
         if (phase == 3) { a = float3(.02, .34, .54); b = float3(.05, .82, .66); c = float3(.06, .38, .8); }
         if (phase == 4) { a = float3(.72, .015, .005); b = float3(1.0, .14, .015); c = float3(.48, .0, .08); }
@@ -736,7 +749,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
             float layerDensity = dot(layerDye, float3(.22, .31, .25));
             float absorption = 1.0 - exp(-layerDensity * .38);
             float fog = exp(-plane * 1.15);
-            light += transmittance * palette(layerDye, u.phase) * (.13 + absorption * .34) * fog;
+            light += transmittance * palette(layerDye, u.phase, u.theme) * (.13 + absorption * .34) * fog;
             transmittance *= 1.0 - absorption * .48;
             density += layerDensity;
         }
@@ -749,7 +762,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         float3 dyeDown = dye.sample(fluidSampler, refracted - float2(0, texel)).rgb;
         float3 dyeUp = dye.sample(fluidSampler, refracted + float2(0, texel)).rgb;
         float3 interfaces = abs(dyeRight - dyeLeft) + abs(dyeUp - dyeDown);
-        light += palette(interfaces, u.phase) * (.72 + pressureSignal * .62);
+        light += palette(interfaces, u.phase, u.theme) * (.72 + pressureSignal * .62);
         // Exposure follows the voice directly. Everything else here has to wait
         // for the fluid to move; this lands on the frame the sound does, and is
         // what makes the orb read as listening rather than merely running.
