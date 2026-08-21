@@ -2,6 +2,13 @@ import Foundation
 import OSLog
 
 actor RealtimeTranscriber {
+    enum StreamKind: Sendable, Equatable {
+        /// Low-latency speech-to-text used while the microphone is open.
+        case live
+        /// Audio-aware text generated from the committed, complete delivery.
+        case expressive
+    }
+
     private let logger = Logger(subsystem: "com.bjarni.Incant", category: "Realtime")
     private var session: URLSession?
     private var socket: URLSessionWebSocketTask?
@@ -17,8 +24,8 @@ actor RealtimeTranscriber {
         mode: TranscriptionMode,
         apiKey: String,
         prompt: String,
-        onDelta: @escaping @Sendable (String) -> Void,
-        onFinal: @escaping @Sendable (String) -> Void,
+        onDelta: @escaping @Sendable (String, StreamKind) -> Void,
+        onFinal: @escaping @Sendable (String, StreamKind) -> Void,
         onError: @escaping @Sendable (String) -> Void
     ) async throws {
         disconnectCurrent()
@@ -106,8 +113,8 @@ actor RealtimeTranscriber {
     private func receiveLoop(
         socket: URLSessionWebSocketTask,
         recordingID: UUID,
-        onDelta: @escaping @Sendable (String) -> Void,
-        onFinal: @escaping @Sendable (String) -> Void,
+        onDelta: @escaping @Sendable (String, StreamKind) -> Void,
+        onFinal: @escaping @Sendable (String, StreamKind) -> Void,
         onError: @escaping @Sendable (String) -> Void
     ) async {
         while !Task.isCancelled, self.recordingID == recordingID {
@@ -138,8 +145,8 @@ actor RealtimeTranscriber {
     private func handle(
         _ data: Data,
         recordingID: UUID,
-        onDelta: @escaping @Sendable (String) -> Void,
-        onFinal: @escaping @Sendable (String) -> Void,
+        onDelta: @escaping @Sendable (String, StreamKind) -> Void,
+        onFinal: @escaping @Sendable (String, StreamKind) -> Void,
         onError: @escaping @Sendable (String) -> Void
     ) {
         guard self.recordingID == recordingID,
@@ -148,24 +155,26 @@ actor RealtimeTranscriber {
         logger.debug("Received Realtime event: \(type, privacy: .public)")
         switch type {
         case "conversation.item.input_audio_transcription.delta":
-            if let delta = event["delta"] as? String { onDelta(delta) }
+            if let delta = event["delta"] as? String { onDelta(delta, .live) }
         case "conversation.item.input_audio_transcription.completed":
-            if let transcript = event["transcript"] as? String {
-                deliverFinal(transcript, to: onFinal)
+            // In Incantation this is the completion of the live draft, not the
+            // completion of the audio-aware expressive pass requested below.
+            if mode == .direct, let transcript = event["transcript"] as? String {
+                deliverFinal(transcript, kind: .live, to: onFinal)
             }
         case "response.output_text.delta", "response.text.delta":
-            if let delta = event["delta"] as? String { onDelta(delta) }
+            if let delta = event["delta"] as? String { onDelta(delta, .expressive) }
         case "response.output_text.done", "response.text.done":
             if let text = event["text"] as? String {
-                deliverFinal(text, to: onFinal)
+                deliverFinal(text, kind: .expressive, to: onFinal)
             }
         case "response.done":
             if !didDeliverFinal, let text = Self.outputText(from: event) {
-                deliverFinal(text, to: onFinal)
+                deliverFinal(text, kind: .expressive, to: onFinal)
             } else if let response = event["response"] as? [String: Any],
                       let status = response["status"] as? String,
                       status == "failed" || status == "incomplete" {
-                onError("Intonation transcription did not complete")
+                onError("Incantation transcription did not complete")
             }
         case "error":
             let details = event["error"] as? [String: Any]
@@ -177,11 +186,12 @@ actor RealtimeTranscriber {
 
     private func deliverFinal(
         _ text: String,
-        to onFinal: @escaping @Sendable (String) -> Void
+        kind: StreamKind,
+        to onFinal: @escaping @Sendable (String, StreamKind) -> Void
     ) {
         guard !didDeliverFinal else { return }
         didDeliverFinal = true
-        onFinal(text)
+        onFinal(text, kind)
     }
 
     private static func sessionUpdate(
@@ -195,15 +205,10 @@ actor RealtimeTranscriber {
 
         switch mode {
         case .direct:
-            var transcription: [String: Any] = [
-                "model": "gpt-live-transcribe",
-                "delay": "low",
-            ]
-            if !recognitionPrompt.isEmpty {
-                transcription["prompt"] = recognitionPrompt
-            }
             var directInput = input
-            directInput["transcription"] = transcription
+            directInput["transcription"] = Self.transcriptionConfiguration(
+                recognitionPrompt: recognitionPrompt
+            )
             return [
                 "type": "session.update",
                 "session": [
@@ -213,6 +218,10 @@ actor RealtimeTranscriber {
             ]
 
         case .intonation:
+            var incantationInput = input
+            incantationInput["transcription"] = Self.transcriptionConfiguration(
+                recognitionPrompt: recognitionPrompt
+            )
             return [
                 "type": "session.update",
                 "session": [
@@ -220,10 +229,24 @@ actor RealtimeTranscriber {
                     "output_modalities": ["text"],
                     "instructions": mode.instructions(recognitionContext: recognitionPrompt),
                     "max_output_tokens": 4_096,
-                    "audio": ["input": input],
+                    // The input transcription supplies live draft deltas while
+                    // the Realtime model retains the same audio for the
+                    // expressive response created when the user stops.
+                    "audio": ["input": incantationInput],
                 ],
             ]
         }
+    }
+
+    private static func transcriptionConfiguration(recognitionPrompt: String) -> [String: Any] {
+        var transcription: [String: Any] = [
+            "model": "gpt-live-transcribe",
+            "delay": "low",
+        ]
+        if !recognitionPrompt.isEmpty {
+            transcription["prompt"] = recognitionPrompt
+        }
+        return transcription
     }
 
     private static func outputText(from event: [String: Any]) -> String? {

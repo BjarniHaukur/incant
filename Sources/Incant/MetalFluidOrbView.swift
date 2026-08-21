@@ -674,7 +674,7 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
-    // Direct is an uncorrupted, cold-blue palantír. Intonation is the same stone
+    // Direct is an uncorrupted, cold-blue palantír. Incantation is the same stone
     // lit by an ember-violet interior: warmer and more interpretive, but never
     // red, because red belongs to exactly one state — an error.
     float3 palette(float3 dye, uint phase, uint theme) {

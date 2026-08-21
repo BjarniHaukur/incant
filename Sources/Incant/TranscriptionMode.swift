@@ -9,7 +9,7 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .direct: "Direct"
-        case .intonation: "Intonation"
+        case .intonation: "Incantation"
         }
     }
 
@@ -18,7 +18,7 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
         case .direct:
             "Streams a literal transcript while you speak"
         case .intonation:
-            "Waits until you stop, then preserves vocal emphasis and emotion"
+            "Writes live, then adds vocal emphasis and emotion"
         }
     }
 

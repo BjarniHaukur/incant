@@ -128,6 +128,38 @@ enum TextInserter {
         return .inserted
     }
 
+    /// Replaces a live draft only when that exact draft is still directly
+    /// behind the caret in the original editor. This is intentionally narrower
+    /// than normal insertion: if the user moved the caret, typed, or the target
+    /// does not expose its value and selection through Accessibility, leaving
+    /// the literal draft alone is safer than guessing at unrelated text.
+    static func replaceRecentlyInserted(
+        _ draft: String,
+        with replacement: String,
+        target: Target
+    ) -> Bool {
+        guard AXIsProcessTrusted(), !draft.isEmpty, isEditable(target.element),
+              let value = stringAttribute(kAXValueAttribute, from: target.element),
+              let selection = selectedTextRange(of: target.element),
+              selection.length == 0 else { return false }
+
+        let valueUnits = Array(value.utf16)
+        let draftUnits = Array(draft.utf16)
+        let end = selection.location
+        let start = end - draftUnits.count
+        guard start >= 0, end <= valueUnits.count,
+              Array(valueUnits[start..<end]) == draftUnits else { return false }
+
+        var range = CFRange(location: start, length: draftUnits.count)
+        guard let rangeValue = AXValueCreate(.cfRange, &range),
+              AXUIElementSetAttributeValue(
+                  target.element,
+                  kAXSelectedTextRangeAttribute as CFString,
+                  rangeValue
+              ) == .success else { return false }
+        return replaceSelection(with: replacement, in: target.element)
+    }
+
     static var hasEditableTarget: Bool {
         guard AXIsProcessTrusted(), let focused = focusedElement() else { return false }
         return isEditable(focused)
@@ -232,13 +264,17 @@ enum TextInserter {
     }
 
     private static func caretLocation(of element: AXUIElement) -> Int? {
+        selectedTextRange(of: element)?.location
+    }
+
+    private static func selectedTextRange(of element: AXUIElement) -> CFRange? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXSelectedTextRangeAttribute as CFString, &value
         ) == .success, let value else { return nil }
         var range = CFRange()
         guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
-        return range.location
+        return range
     }
 
     /// Did this element come out of a web page? Both Chromium and WebKit hang DOM

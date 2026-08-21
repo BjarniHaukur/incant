@@ -10,7 +10,7 @@ struct RecorderOrbView: View {
     @State private var composerHeight: CGFloat = 36
     @State private var showingRecoveryList = false
 
-    /// Direct is the cold, literal stone. Intonation warms the same material
+    /// Direct is the cold, literal stone. Incantation warms the same material
     /// toward violet so the active interpretation mode is visible at a glance.
     private var stoneLight: Color {
         model.transcriptionMode == .intonation
