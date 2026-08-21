@@ -243,7 +243,7 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(width: 174)
-            .help("Direct stays literal. Expressive writes live, then refines the same words from their audible delivery.")
+            .help("Direct is faster. Expressive is slightly slower and more emotive.")
         }
         .padding(.horizontal, 16).frame(minHeight: 72)
     }

@@ -16,9 +16,9 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .direct:
-            "Streams a literal transcript while you speak"
+            "Faster"
         case .intonation:
-            "Writes live, then adds vocal emphasis and emotion"
+            "Slightly slower, more emotive"
         }
     }
 
