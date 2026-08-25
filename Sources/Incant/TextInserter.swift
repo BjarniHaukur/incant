@@ -11,10 +11,16 @@ enum TextInserter {
     nonisolated(unsafe) private static var lastRefusal = ""
 
     final class Target {
-        fileprivate let element: AXUIElement
+        fileprivate var element: AXUIElement
+        fileprivate let processIdentifier: pid_t
 
-        fileprivate init(element: AXUIElement) {
+        fileprivate init?(element: AXUIElement) {
+            var processIdentifier: pid_t = 0
+            guard AXUIElementGetPid(element, &processIdentifier) == .success else {
+                return nil
+            }
             self.element = element
+            self.processIdentifier = processIdentifier
         }
     }
 
@@ -80,9 +86,28 @@ enum TextInserter {
         guard AXIsProcessTrusted() else { return .accessibilityDenied }
         guard !text.isEmpty else { return .inserted }
 
+        // A recording can outlive a browser's focused accessibility node. Web
+        // apps routinely replace their composer node on blur, which leaves a
+        // perfectly non-nil AXUIElement that will never accept another write.
+        // Refresh it before every insertion. The cached element remains useful
+        // only across the brief focus gaps caused by showing the recorder.
+        let focusedTarget: AXUIElement?
+        if let target {
+            guard frontmostProcessIdentifier == target.processIdentifier else {
+                logRefusal(nil)
+                return .noEditableTarget
+            }
+            if let refreshed = focusedElement(processIdentifier: target.processIdentifier),
+               isEditable(refreshed) || isWebContext(refreshed) {
+                target.element = refreshed
+            }
+            focusedTarget = target.element
+        } else {
+            focusedTarget = focusedElement()
+        }
+
         // Prefer replacing the focused element's current selection. This is
         // the most direct insertion path and keeps the caret in the target app.
-        let focusedTarget = target?.element ?? focusedElement()
         guard let focused = focusedTarget else {
             logRefusal(nil)
             return .noEditableTarget
@@ -140,9 +165,8 @@ enum TextInserter {
     /// and dictation into a web page goes nowhere. Screen readers get the tree
     /// by setting exactly this attribute. Apps that do not know it return
     /// unsupported, which is harmless.
-    private static func requestWebAccessibility() {
-        guard let application = NSWorkspace.shared.frontmostApplication,
-              !webAccessibilityRequested.contains(application.processIdentifier) else { return }
+    private static func requestWebAccessibility(for application: NSRunningApplication) {
+        guard !webAccessibilityRequested.contains(application.processIdentifier) else { return }
         webAccessibilityRequested.insert(application.processIdentifier)
         let element = AXUIElementCreateApplication(application.processIdentifier)
         let result = AXUIElementSetAttributeValue(
@@ -170,22 +194,55 @@ enum TextInserter {
         logger.error("No editable target in \(refusal, privacy: .public)")
     }
 
-    private static func focusedElement() -> AXUIElement? {
-        requestWebAccessibility()
+    private static var frontmostProcessIdentifier: pid_t? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+
+    private static func focusedElement(processIdentifier requestedPID: pid_t? = nil) -> AXUIElement? {
+        let application: NSRunningApplication?
+        if let requestedPID {
+            application = NSRunningApplication(processIdentifier: requestedPID)
+        } else {
+            application = NSWorkspace.shared.frontmostApplication
+        }
+        guard let application,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return nil
+        }
+        requestWebAccessibility(for: application)
+
+        // The system-wide focus query is normally enough. Around application
+        // and window switches it can transiently return no value even though
+        // the frontmost application still publishes its focused editor. Ask
+        // that application directly before treating the caret as lost.
         let system = AXUIElementCreateSystemWide()
-        var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            system,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
-        ) == .success, let focusedValue else { return nil }
-        let focused = unsafeBitCast(focusedValue, to: AXUIElement.self)
-        var pid: pid_t = 0
-        if AXUIElementGetPid(focused, &pid) == .success,
-           pid == ProcessInfo.processInfo.processIdentifier {
+        if let focused = elementAttribute(kAXFocusedUIElementAttribute, from: system),
+           processIdentifier(of: focused) == application.processIdentifier {
+            return focused
+        }
+
+        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        guard let focused = elementAttribute(kAXFocusedUIElementAttribute, from: applicationElement),
+              processIdentifier(of: focused) == application.processIdentifier else {
             return nil
         }
         return focused
+    }
+
+    private static func elementAttribute(
+        _ attribute: String,
+        from element: AXUIElement
+    ) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+
+    private static func processIdentifier(of element: AXUIElement) -> pid_t? {
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(element, &processIdentifier) == .success else { return nil }
+        return processIdentifier
     }
 
     /// Writes over the current selection and confirms the write actually took.

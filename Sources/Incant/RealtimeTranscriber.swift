@@ -22,9 +22,8 @@ actor RealtimeTranscriber {
         onError: @escaping @Sendable (String) -> Void
     ) async throws {
         disconnectCurrent()
-        // Both modes are transcription sessions. Expressive changes only the
-        // transcription model's latency and prompt; it never generates a second
-        // response that would have to rewrite text in another application.
+        // Both modes are transcription sessions. Accurate waits for more audio
+        // context before emitting the same append-only transcript stream.
         let endpoint = "wss://eu.api.openai.com/v1/realtime?intent=transcription"
         var request = URLRequest(url: URL(string: endpoint)!)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -188,17 +187,16 @@ actor RealtimeTranscriber {
         ]
     }
 
-    private static func transcriptionConfiguration(
+    static func transcriptionConfiguration(
         mode: TranscriptionMode,
         recognitionPrompt: String
     ) -> [String: Any] {
         var transcription: [String: Any] = [
             "model": "gpt-live-transcribe",
-            "delay": mode == .direct ? "low" : "medium",
+            "delay": mode.delay,
         ]
-        let prompt = mode.transcriptionPrompt(recognitionContext: recognitionPrompt)
-        if !prompt.isEmpty {
-            transcription["prompt"] = prompt
+        if !recognitionPrompt.isEmpty {
+            transcription["prompt"] = recognitionPrompt
         }
         return transcription
     }

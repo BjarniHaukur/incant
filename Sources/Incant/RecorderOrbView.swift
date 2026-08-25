@@ -10,12 +10,10 @@ struct RecorderOrbView: View {
     @State private var composerHeight: CGFloat = 36
     @State private var showingRecoveryList = false
 
-    /// Direct is the cold, literal stone. Incantation warms the same material
-    /// toward violet so the active interpretation mode is visible at a glance.
+    /// Transcription quality should not repaint the app. The former expressive
+    /// theme made the slower setting feel like a different, heavier product.
     private var stoneLight: Color {
-        model.transcriptionMode == .intonation
-            ? Color(red: 0.66, green: 0.25, blue: 0.9)
-            : Color(red: 0.16, green: 0.4, blue: 0.95)
+        Color(red: 0.16, green: 0.4, blue: 0.95)
     }
 
     var body: some View {
@@ -215,20 +213,11 @@ struct RecorderOrbView: View {
     private var glowColor: Color {
         switch model.phase {
         case .error: return Color(red: 1, green: 0.08, blue: 0.03)
-        case .connecting:
-            return model.transcriptionMode == .intonation
-                ? Color(red: 0.58, green: 0.16, blue: 0.86)
-                : Color(red: 0.33, green: 0.24, blue: 1)
-        case .finishing:
-            return model.transcriptionMode == .intonation
-                ? Color(red: 0.48, green: 0.12, blue: 0.62)
-                : Color(red: 0.15, green: 0.24, blue: 0.7)
+        case .connecting: return Color(red: 0.33, green: 0.24, blue: 1)
+        case .finishing: return Color(red: 0.15, green: 0.24, blue: 0.7)
         case .success: return Color(red: 0.05, green: 0.9, blue: 0.65)
         // The uncorrupted stone: what it throws on the desk while it waits.
-        case .idle, .listening:
-            return model.transcriptionMode == .intonation
-                ? Color(red: 0.5, green: 0.12, blue: 0.72)
-                : Color(red: 0.05, green: 0.28, blue: 0.9)
+        case .idle, .listening: return Color(red: 0.05, green: 0.28, blue: 0.9)
         }
     }
 }

@@ -387,14 +387,11 @@ final class AppModel: ObservableObject {
 
     private func stopRecording() {
         guard let recordingID = activeRecordingID else { return }
-        // Both modes stream directly. Expressive may still have a slightly
-        // larger tail to flush because its transcription latency is higher.
-        if activeTranscriptionMode == .direct {
-            hideRecorder?()
-            NSApplication.shared.dockTile.badgeLabel = nil
-        } else {
-            NSApplication.shared.dockTile.badgeLabel = "…"
-        }
+        // Stopping should feel identical in both modes. Accurate can have a
+        // larger transcription tail, but keeping the whole recorder visible
+        // makes that server-side tradeoff feel like application latency.
+        hideRecorder?()
+        NSApplication.shared.dockTile.badgeLabel = nil
         startTask?.cancel()
         audio.stop()
         level = 0
@@ -492,7 +489,14 @@ final class AppModel: ObservableObject {
     private func flushBufferedTextIfPossible(force: Bool = false) {
         guard force || autoInsertEnabled else { return }
         guard !bufferedText.isEmpty else { return }
-        guard let currentTarget = sessionInsertionTarget ?? TextInserter.captureTarget() else {
+        // Accessibility elements in browser and Electron composers are not
+        // durable: changing windows can replace the focused DOM node while the
+        // old AXUIElement remains non-nil. Always prefer the current caret and
+        // retain the last one only for the brief gaps where macOS reports none.
+        if let focusedTarget = TextInserter.captureTarget() {
+            sessionInsertionTarget = focusedTarget
+        }
+        guard let currentTarget = sessionInsertionTarget else {
             ensureBufferFlushLoop()
             return
         }

@@ -222,17 +222,15 @@ struct SettingsView: View {
         HStack(spacing: 14) {
             statusOrb(
                 ready: true,
-                color: model.transcriptionMode == .intonation
-                    ? Color(red: 0.66, green: 0.25, blue: 0.9)
-                    : .blue
+                color: .blue
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text("Incantation").font(.system(size: 14, weight: .medium))
+                Text("Transcription").font(.system(size: 14, weight: .medium))
                 Text(model.transcriptionMode.summary)
                     .font(.caption).foregroundStyle(.white.opacity(0.42))
             }
             Spacer(minLength: 12)
-            Picker("Incantation", selection: Binding(
+            Picker("Transcription", selection: Binding(
                 get: { model.transcriptionMode },
                 set: { model.setTranscriptionMode($0) }
             )) {
@@ -243,7 +241,7 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(width: 174)
-            .help("Direct is faster. Expressive is slightly slower and more emotive.")
+            .help("Live writes sooner. Accurate waits for more speech context and can reduce mishearing.")
         }
         .padding(.horizontal, 16).frame(minHeight: 72)
     }

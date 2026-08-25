@@ -56,7 +56,7 @@ struct MetalFluidOrbView: NSViewRepresentable {
             energy: Float(model.level),
             motion: model.orbMotion,
             motionEnergy: model.orbMotionEnergy,
-            theme: model.transcriptionMode == .intonation ? 1 : 0,
+            theme: 0,
             seed: model.orbSeed
         )
     }
@@ -674,9 +674,9 @@ private final class MetalFluidRenderer: NSObject, MTKViewDelegate {
         output.write(half4(half3(clamp(density, 0.0, 3.0)), 1), g);
     }
 
-    // Direct is an uncorrupted, cold-blue palantír. Incantation is the same stone
-    // lit by an ember-violet interior: warmer and more interpretive, but never
-    // red, because red belongs to exactly one state — an error.
+    // The stone stays cold blue in both transcription modes. Accuracy is a
+    // latency choice, not a different visual personality. Red still belongs to
+    // exactly one state — an error.
     float3 palette(float3 dye, uint phase, uint theme) {
         float3 a = float3(.015, .09, .34);
         float3 b = float3(.05, .38, .78);

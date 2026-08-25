@@ -2,36 +2,30 @@ import Foundation
 
 enum TranscriptionMode: String, CaseIterable, Identifiable {
     case direct
-    case intonation
+    case accurate
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .direct: "Direct"
-        case .intonation: "Expressive"
+        case .direct: "Live"
+        case .accurate: "Accurate"
         }
     }
 
     var summary: String {
         switch self {
         case .direct:
-            "Faster"
-        case .intonation:
-            "Slightly slower, more emotive"
+            "Responsive live text"
+        case .accurate:
+            "More context, can reduce mishearing"
         }
     }
 
-    func transcriptionPrompt(recognitionContext: String) -> String {
-        guard self == .intonation else { return recognitionContext }
-        var prompt = """
-        Transcribe exactly. Preserve audible emotion with punctuation. Mark
-        stressed words as *italic* and forceful, angry, or shouted words as
-        **bold**. Output only what was spoken.
-        """
-        if !recognitionContext.isEmpty {
-            prompt += "\n\nVocabulary and speaker context:\n\(recognitionContext)"
+    var delay: String {
+        switch self {
+        case .direct: "low"
+        case .accurate: "medium"
         }
-        return prompt
     }
 }
