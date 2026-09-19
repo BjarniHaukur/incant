@@ -12,11 +12,26 @@ Press **Command-Shift-Space** to start recording. Press it again to commit the
 audio and stop. Transcript deltas are inserted continuously at the focused
 cursor while you speak.
 
-The **Transcription** setting has two explicit latency/accuracy choices. **Live**
-uses `gpt-live-transcribe` at low delay for the most responsive cursor typing.
-**Accurate** uses medium delay so the model can hear more speech context before
-emitting text, which can reduce misheard words. Both produce the same plain,
-append-only transcript stream and neither changes Incant's appearance.
+Transcription uses `gpt-live-transcribe` at low delay, so words reach the cursor
+as soon as the model has them. There is no slower setting.
+
+## The transcript log
+
+Everything you say is written to one plain-text file as it arrives:
+
+```
+~/Library/Application Support/Incant/transcript.txt
+```
+
+Each delta is appended the moment it is accepted, not when a session ends, so
+the words survive whatever happens to them in the app they were typed into — a
+stray ⌘⌫ in a terminal, a crash, a window that was not the one you meant. The
+file is broken into chapters by time alone: a pause longer than ten seconds
+between two deltas starts a new `[yyyy-MM-dd HH:mm:ss]` header. Nothing is
+dropped for being short.
+
+**Open** in the settings row opens the file. While a session is running, the
+**Last** and **All** buttons under the orb put a chapter back into the box.
 
 ## The orb
 

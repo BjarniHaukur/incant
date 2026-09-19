@@ -10,8 +10,6 @@ struct RecorderOrbView: View {
     @State private var composerHeight: CGFloat = 36
     @State private var showingRecoveryList = false
 
-    /// Transcription quality should not repaint the app. The former expressive
-    /// theme made the slower setting feel like a different, heavier product.
     private var stoneLight: Color {
         Color(red: 0.16, green: 0.4, blue: 0.95)
     }
@@ -45,7 +43,7 @@ struct RecorderOrbView: View {
 
     private var transcriptComposer: some View {
         let hasText = !model.bufferedText.isEmpty
-        let canRecover = !model.history.records.isEmpty
+        let canRecover = !model.transcript.chapters.isEmpty
         return VStack(spacing: 6) {
             HStack(spacing: 7) {
                 hoverButton(
@@ -89,28 +87,28 @@ struct RecorderOrbView: View {
         .onHover { composerHovered = $0 }
     }
 
-    /// Getting words back into the box, for when they went somewhere unintended.
-    /// Both are only worth showing once there is something to recover.
+    /// Getting words back into the box, for when they went somewhere unintended
+    /// or were lost there. Both are only worth showing once there is a transcript.
     private var recoveryButtons: some View {
         HStack(spacing: 6) {
             capsuleButton(
                 systemName: "arrow.uturn.backward",
                 label: "Last",
-                help: model.lastTranscript.map { "Put back: \($0.text.prefix(60))…" } ?? ""
+                help: model.lastChapter.map { "Put back: \($0.text.prefix(60))…" } ?? ""
             ) {
-                model.stageLastTranscript()
+                model.stageLastChapter()
             }
 
             capsuleButton(
                 systemName: "list.bullet",
                 label: "All",
-                help: "Earlier dictations"
+                help: "The transcript log"
             ) {
                 showingRecoveryList.toggle()
             }
             .popover(isPresented: $showingRecoveryList, arrowEdge: .bottom) {
-                TranscriptRecoveryList(history: model.history) { record in
-                    model.stage(record)
+                TranscriptRecoveryList(log: model.transcript) { chapter in
+                    model.stage(chapter)
                     showingRecoveryList = false
                 }
             }
