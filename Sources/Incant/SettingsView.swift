@@ -35,7 +35,7 @@ struct SettingsView: View {
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     shortcutRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
-                    transcriptionModeRow
+                    transcriptLogRow
                     Divider().overlay(.white.opacity(0.07)).padding(.leading, 54)
                     recognitionContextRow
                 }
@@ -218,32 +218,33 @@ struct SettingsView: View {
         .padding(.horizontal, 16).frame(minHeight: 64)
     }
 
-    private var transcriptionModeRow: some View {
+    /// The one place the words are always kept, reachable without a session
+    /// running — which is when they are usually missed.
+    private var transcriptLogRow: some View {
         HStack(spacing: 14) {
-            statusOrb(
-                ready: true,
-                color: .blue
-            )
+            statusOrb(ready: !model.transcript.chapters.isEmpty, color: .blue)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Transcription").font(.system(size: 14, weight: .medium))
-                Text(model.transcriptionMode.summary)
+                Text("Transcript log").font(.system(size: 14, weight: .medium))
+                Text(transcriptLogDescription)
                     .font(.caption).foregroundStyle(.white.opacity(0.42))
             }
             Spacer(minLength: 12)
-            Picker("Transcription", selection: Binding(
-                get: { model.transcriptionMode },
-                set: { model.setTranscriptionMode($0) }
-            )) {
-                ForEach(TranscriptionMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 174)
-            .help("Live writes sooner. Accurate waits for more speech context and can reduce mishearing.")
+            Button("Open") { model.transcript.openFile() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.blue)
+                .help(TranscriptLog.fileURL.path)
         }
-        .padding(.horizontal, 16).frame(minHeight: 72)
+        .padding(.horizontal, 16).frame(minHeight: 68)
+    }
+
+    private var transcriptLogDescription: String {
+        let count = model.transcript.chapters.count
+        switch count {
+        case 0: return "Everything you say, written down as you say it"
+        case 1: return "1 chapter so far, written as you speak"
+        default: return "\(count) chapters so far, written as you speak"
+        }
     }
 
     private var recognitionContextRow: some View {

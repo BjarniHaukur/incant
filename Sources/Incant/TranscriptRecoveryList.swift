@@ -1,35 +1,34 @@
 import SwiftUI
 
-/// The earlier dictations, as a way back into the box under the orb — not as an
-/// archive Incant keeps about you. Picking one stages it and closes.
+/// The transcript log, newest chapter first, as a way back into the box under
+/// the orb. Picking a chapter stages it and closes; the file itself is a click
+/// away for anything longer than the box wants to hold.
 struct TranscriptRecoveryList: View {
-    @ObservedObject var history: TranscriptHistory
-    let stage: (TranscriptRecord) -> Void
+    @ObservedObject var log: TranscriptLog
+    let stage: (TranscriptChapter) -> Void
+
+    private var chapters: [TranscriptChapter] { log.chapters.suffix(200).reversed() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(spacing: 4) {
-                    ForEach(history.records) { record in
-                        Button { stage(record) } label: {
+                    ForEach(chapters) { chapter in
+                        Button { stage(chapter) } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
-                                    Text(record.date, format: .relative(presentation: .numeric))
+                                    Text(chapter.date, format: .relative(presentation: .numeric))
                                         .font(.system(size: 9, weight: .medium))
                                         .foregroundStyle(.white.opacity(0.45))
-                                    if record.delivered, !record.destination.isEmpty {
-                                        Text(record.destination)
-                                            .font(.system(size: 9))
-                                            .foregroundStyle(.white.opacity(0.3))
-                                    } else if !record.delivered {
-                                        // The reason any of this exists.
-                                        Text("never landed")
-                                            .font(.system(size: 9))
-                                            .foregroundStyle(Color.orange.opacity(0.7))
-                                    }
+                                    Text(chapter.date, format: .dateTime.hour().minute())
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.3))
                                     Spacer()
+                                    Text("\(chapter.text.count)")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.25))
                                 }
-                                Text(record.text)
+                                Text(chapter.text)
                                     .font(.system(size: 11, design: .rounded))
                                     .foregroundStyle(.white.opacity(0.8))
                                     .lineLimit(2)
@@ -42,6 +41,7 @@ struct TranscriptRecoveryList: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .help("Put back into the box")
                     }
                 }
                 .padding(8)
@@ -49,19 +49,20 @@ struct TranscriptRecoveryList: View {
 
             Divider().overlay(.white.opacity(0.08))
             HStack {
-                Text("\(history.records.count) kept")
+                Text("\(log.chapters.count) chapters")
                     .font(.system(size: 9))
                     .foregroundStyle(.white.opacity(0.3))
                 Spacer()
-                Button("Forget all") { history.forgetEverything() }
+                Button("Open log") { log.openFile() }
                     .buttonStyle(.plain)
                     .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.38))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help(TranscriptLog.fileURL.path)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
         }
-        .frame(width: 280, height: min(320, 60 + Double(history.records.count) * 52))
+        .frame(width: 280, height: min(320, 60 + Double(chapters.count) * 52))
         .background(Color(red: 0.01, green: 0.014, blue: 0.03))
         .preferredColorScheme(.dark)
     }

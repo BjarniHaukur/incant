@@ -14,7 +14,6 @@ actor RealtimeTranscriber {
 
     func connect(
         recordingID: UUID,
-        mode: TranscriptionMode,
         apiKey: String,
         prompt: String,
         onDelta: @escaping @Sendable (String) -> Void,
@@ -22,8 +21,6 @@ actor RealtimeTranscriber {
         onError: @escaping @Sendable (String) -> Void
     ) async throws {
         disconnectCurrent()
-        // Both modes are transcription sessions. Accurate waits for more audio
-        // context before emitting the same append-only transcript stream.
         let endpoint = "wss://eu.api.openai.com/v1/realtime?intent=transcription"
         var request = URLRequest(url: URL(string: endpoint)!)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -46,7 +43,7 @@ actor RealtimeTranscriber {
             )
         }
         try await send(
-            Self.sessionUpdate(mode: mode, recognitionPrompt: prompt),
+            Self.sessionUpdate(recognitionPrompt: prompt),
             recordingID: recordingID
         )
         try Task.checkCancellation()
@@ -166,18 +163,12 @@ actor RealtimeTranscriber {
         logger.info("Receiving \(kind, privacy: .public) transcript deltas")
     }
 
-    private static func sessionUpdate(
-        mode: TranscriptionMode,
-        recognitionPrompt: String
-    ) -> [String: Any] {
+    private static func sessionUpdate(recognitionPrompt: String) -> [String: Any] {
         var input: [String: Any] = [
             "format": ["type": "audio/pcm", "rate": 24_000],
             "turn_detection": NSNull(),
         ]
-        input["transcription"] = Self.transcriptionConfiguration(
-            mode: mode,
-            recognitionPrompt: recognitionPrompt
-        )
+        input["transcription"] = Self.transcriptionConfiguration(recognitionPrompt: recognitionPrompt)
         return [
             "type": "session.update",
             "session": [
@@ -187,13 +178,13 @@ actor RealtimeTranscriber {
         ]
     }
 
-    static func transcriptionConfiguration(
-        mode: TranscriptionMode,
-        recognitionPrompt: String
-    ) -> [String: Any] {
+    /// Low delay is the only setting: words reach the cursor as soon as the
+    /// model has them. A slower, more context-aware setting was tried and
+    /// removed, since nothing it gained was worth the wait.
+    static func transcriptionConfiguration(recognitionPrompt: String) -> [String: Any] {
         var transcription: [String: Any] = [
             "model": "gpt-live-transcribe",
-            "delay": mode.delay,
+            "delay": "low",
         ]
         if !recognitionPrompt.isEmpty {
             transcription["prompt"] = recognitionPrompt

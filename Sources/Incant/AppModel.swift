@@ -26,7 +26,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var shortcut = GlobalHotKey.Shortcut.load()
     @Published private(set) var shortcutError: String?
     @Published private(set) var recognitionPrompt = AppModel.loadRecognitionPrompt()
-    @Published private(set) var transcriptionMode = AppModel.loadTranscriptionMode()
     @Published var apiKeyDraft = ""
     @Published private(set) var keySaved = false
     @Published private(set) var apiKeyError: String?
@@ -46,18 +45,13 @@ final class AppModel: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var bufferFlushTask: Task<Void, Never>?
     private var motionDecayTask: Task<Void, Never>?
-    let history = TranscriptHistory()
-    /// Everything heard in the current session, kept whole so history holds one
-    /// entry per dictation rather than one per delta, and where the first words
-    /// were typed, which is the part worth knowing when they went somewhere
-    /// unexpected.
-    private var sessionTranscript = ""
-    private var sessionDestination: String?
+    /// Every accepted delta goes here as it arrives, so the words survive
+    /// whatever happens to them in the app they were typed into.
+    let transcript = TranscriptLog()
     private var sessionInsertionTarget: TextInserter.Target?
     private var insertedCharacters = 0
     private var accessibilityFailureReported = false
     private var transcriptionFinalReceived = false
-    private var activeTranscriptionMode: TranscriptionMode = .direct
     /// Async work is tagged with the recording that created it. Rapid toggles
     /// can otherwise let an old connect, callback, disconnect, or timer mutate
     /// the new recording without producing an error state.
@@ -159,11 +153,6 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(recognitionPrompt, forKey: Self.recognitionPromptDefaultsKey)
     }
 
-    func setTranscriptionMode(_ mode: TranscriptionMode) {
-        transcriptionMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: Self.transcriptionModeDefaultsKey)
-    }
-
     func updateShortcut(_ shortcut: GlobalHotKey.Shortcut) {
         if let error = applyShortcut?(shortcut) {
             shortcutError = error
@@ -204,22 +193,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// The most recent dictation worth going back for, if there is one.
-    var lastTranscript: TranscriptRecord? { history.records.first }
+    /// The most recent stretch of speech, if there is one.
+    var lastChapter: TranscriptChapter? { transcript.lastChapter }
 
-    /// Puts a past dictation back into the staging box under the orb.
-    ///
-    /// Anything that streamed cleanly into another app belongs to that app — it
-    /// is the editing surface and the place it persists. This exists only for the
-    /// times the words went somewhere unintended, so the way back is into
-    /// Incant's own box rather than into a list Incant keeps about you.
-    func stage(_ record: TranscriptRecord) {
-        bufferedText = bufferedText.isEmpty ? record.text : bufferedText + " " + record.text
+    /// Puts a chapter of the transcript back into the staging box under the orb,
+    /// for when the words went somewhere unintended — or were deleted there.
+    func stage(_ chapter: TranscriptChapter) {
+        bufferedText = bufferedText.isEmpty ? chapter.text : bufferedText + " " + chapter.text
     }
 
-    func stageLastTranscript() {
-        guard let record = lastTranscript else { return }
-        stage(record)
+    func stageLastChapter() {
+        guard let chapter = lastChapter else { return }
+        stage(chapter)
     }
 
     func copyBufferedText() {
@@ -294,13 +279,10 @@ final class AppModel: ObservableObject {
 
         let recordingID = UUID()
         activeRecordingID = recordingID
-        activeTranscriptionMode = transcriptionMode
         finishTimeout?.cancel()
         startTask?.cancel()
         level = 0
         bufferedText = ""
-        sessionTranscript = ""
-        sessionDestination = nil
         // Preserve the editor that owns the caret for live writing.
         sessionInsertionTarget = TextInserter.captureTarget()
         bufferFlushTask?.cancel()
@@ -335,7 +317,6 @@ final class AppModel: ObservableObject {
             do {
                 try await self.transcriber.connect(
                     recordingID: recordingID,
-                    mode: self.activeTranscriptionMode,
                     apiKey: apiKey,
                     prompt: self.recognitionPrompt,
                     onDelta: { [weak self] delta in
@@ -387,9 +368,8 @@ final class AppModel: ObservableObject {
 
     private func stopRecording() {
         guard let recordingID = activeRecordingID else { return }
-        // Stopping should feel identical in both modes. Accurate can have a
-        // larger transcription tail, but keeping the whole recorder visible
-        // makes that server-side tradeoff feel like application latency.
+        // The panel leaves on the hotkey edge; the transcription tail is
+        // handled behind it so server latency never reads as app latency.
         hideRecorder?()
         NSApplication.shared.dockTile.badgeLabel = nil
         startTask?.cancel()
@@ -429,7 +409,7 @@ final class AppModel: ObservableObject {
         // losing it or pasting it blindly.
         if insertedCharacters == 0, bufferedText.isEmpty, !transcript.isEmpty {
             bufferedText = transcript
-            if sessionTranscript.isEmpty { sessionTranscript = transcript }
+            self.transcript.append(transcript)
             if autoInsertEnabled { flushBufferedTextIfPossible() }
             if phase == .success { return }
         }
@@ -479,7 +459,7 @@ final class AppModel: ObservableObject {
               acceptsTranscript,
               phase == .listening || phase == .finishing,
               !delta.isEmpty else { return }
-        sessionTranscript += delta
+        transcript.append(delta)
         bufferedText += delta
         if autoInsertEnabled {
             flushBufferedTextIfPossible()
@@ -505,9 +485,6 @@ final class AppModel: ObservableObject {
         case .inserted:
             bufferedText = ""
             insertedCharacters += pending.count
-            if sessionDestination == nil {
-                sessionDestination = NSWorkspace.shared.frontmostApplication?.localizedName
-            }
             logger.debug("Flushed \(pending.count, privacy: .public) buffered characters")
             bufferFlushTask?.cancel()
             bufferFlushTask = nil
@@ -588,14 +565,6 @@ final class AppModel: ObservableObject {
         settleTask = nil
         bufferFlushTask?.cancel()
         bufferFlushTask = nil
-        // Every ending funnels through here — finished, failed, dismissed, or
-        // given up on — so this is the one place the session can be written down.
-        history.remember(
-            sessionTranscript,
-            destination: sessionDestination,
-            delivered: insertedCharacters > 0
-        )
-        sessionTranscript = ""
         sessionInsertionTarget = nil
         activeRecordingID = nil
         phase = .idle
@@ -606,13 +575,6 @@ final class AppModel: ObservableObject {
 
     private static let recognitionPromptDefaultsKey = "transcriptionRecognitionPrompt"
     private static let legacyKeywordsDefaultsKey = "transcriptionKeywords"
-    private static let transcriptionModeDefaultsKey = "transcriptionMode"
-
-    private static func loadTranscriptionMode() -> TranscriptionMode {
-        guard let stored = UserDefaults.standard.string(forKey: transcriptionModeDefaultsKey),
-              let mode = TranscriptionMode(rawValue: stored) else { return .direct }
-        return mode
-    }
 
     private static func loadRecognitionPrompt() -> String {
         if let prompt = UserDefaults.standard.string(forKey: recognitionPromptDefaultsKey) {
